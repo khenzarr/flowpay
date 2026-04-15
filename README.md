@@ -2,7 +2,7 @@
 
 **The onchain payment layer for the multi-chain world.**
 
-Send USDC. Deploy contracts. Route across chains. All from one interface — powered by Arc Testnet.
+Send USDC. Deploy contracts. Route across chains. All from one interface powered by KHENZAR on Arc Testnet.
 
 > _"Users shouldn't think in chains. They should think in outcomes."_
 
@@ -36,7 +36,7 @@ FlowPay takes a different approach: **Arc as the execution layer, user as the ro
 
 **Route**
 - Cross-chain transfers: Arc → Sepolia, Sepolia → Arc, any → any
-- Manual 2-step routing — you control when each step executes
+- Manual 2-step routing you control when each step executes
 - Wallet mismatch detection with explicit switch prompts (no silent auto-switching)
 
 **Deploy on Arc**
@@ -59,13 +59,13 @@ Arc Testnet is not just another EVM chain.
 
 **USDC is the native gas token on Arc.** No ETH. No wrapping. You pay fees in the same asset you're moving. This collapses the UX complexity of every other chain.
 
-FlowPay treats Arc as the primary settlement layer — the place where value originates before routing outward.
+FlowPay treats Arc as the primary settlement layer the place where value originates before routing outward.
 
 > _"Arc is not a chain. It's an execution layer."_
 
 ### Cross-Chain: The 2-Step System
 
-Most cross-chain tools hide the complexity. FlowPay exposes it — cleanly.
+Most cross-chain tools hide the complexity. FlowPay exposes it cleanly.
 
 **Step 1 — Source Transaction (real, onchain)**
 - Wallet must be on source chain
@@ -95,7 +95,7 @@ The router is a pure function. It describes what will happen. It never executes 
 ## 🧩 Product Philosophy
 
 **User-controlled routing.**
-The system never switches your wallet without permission. If your wallet is on the wrong chain, you get a warning and a button — not a silent redirect.
+The system never switches your wallet without permission. If your wallet is on the wrong chain, you get a warning and a button not a silent redirect.
 
 **No hidden automation.**
 Every transaction step is visible before it executes. The fee is shown. The route is shown. The chain is shown.
@@ -209,9 +209,9 @@ The **Deploy** tab is a one-click contract launcher for Arc Testnet.
 
 ### Why Arc for Deployment?
 
-- USDC is the gas token — no ETH needed
+- USDC is the gas token no ETH needed
 - Fast finality
-- EVM-compatible — your contracts work as-is
+- EVM-compatible your contracts work as-is
 - Explorer: [testnet.arcscan.app](https://testnet.arcscan.app)
 
 ---
@@ -236,7 +236,7 @@ Step 1 (wallet on Arc):
   → Send USDC to recipient on Arc
   → Tx confirmed, hash saved
 
-[UI pauses — you switch wallet to Sepolia]
+[UI pauses you switch wallet to Sepolia]
 
 Step 2 (wallet on Sepolia):
   → Click "Complete Transfer"
@@ -265,7 +265,7 @@ Step 2 (wallet on Arc):
 When USDC is the gas token, the mental model collapses from "I need ETH to move USDC" to "I just move USDC." Arc gets this right. FlowPay is built around it.
 
 **2. Explicit > automatic in cross-chain UX.**
-Every cross-chain tool that auto-switches chains loses user trust the moment something goes wrong. The 2-step model makes the seam visible — and that's a feature, not a bug.
+Every cross-chain tool that auto-switches chains loses user trust the moment something goes wrong. The 2-step model makes the seam visible and that's a feature, not a bug.
 
 **3. The deploy experience is the onboarding.**
 The fastest way to make a developer trust a chain is to let them deploy something on it in 60 seconds. The Deploy tab exists for this reason.
@@ -276,7 +276,7 @@ The fastest way to make a developer trust a chain is to let them deploy somethin
 
 FlowPay is open source and actively developed.
 
-If you're building on Arc, experimenting with cross-chain UX, or just want to ship something real — this is a good place to start.
+If you're building on Arc, experimenting with cross-chain UX, or just want to ship something real this is a good place to start.
 
 **Good first issues:**
 - Add support for additional testnets
@@ -301,9 +301,9 @@ Open a PR. Keep it focused. Explain the why.
 
 ⭐ **Star the repo** if you find it useful — it helps others discover it.
 
-🐦 **Share on X** — tag [@khenzarr](https://x.com/khenzarr) if you build something with it.
+🐦 **Share on X** —> tag [@cryptokhenzar](https://x.com/cryptokhenzar) if you build something with it.
 
-🔧 **Fork it** — use FlowPay as a starting point for your own Arc-based app.
+🔧 **Fork it** —> use FlowPay as a starting point for your own Arc-based app.
 
 ---
 
