@@ -11,7 +11,7 @@ import {
   setMockUsdcAddress,
   isNativeUsdc,
 } from "./contracts";
-import { getChainById, ChainConfig, ARC_CHAIN_ID } from "./chains";
+import { getChainById, ChainConfig } from "./chains";
 import { MOCK_USDC_ABI, MOCK_USDC_BYTECODE } from "./mockUsdcArtifact";
 import {
   ERC20_TOKEN_ABI,
@@ -20,7 +20,7 @@ import {
   ERC721_NFT_BYTECODE,
 } from "./arcContracts";
 
-// ── Minimal ABIs ──────────────────────────────────────────────────────────────
+// ── Minimal ERC-20 ABI ────────────────────────────────────────────────────────
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -56,7 +56,7 @@ export function getProvider(): BrowserProvider {
 // ── USDC address resolution ───────────────────────────────────────────────────
 
 export async function getUsdcAddress(chainId: number): Promise<string | null> {
-  if (isNativeUsdc(chainId)) return null; // Arc: native USDC
+  if (isNativeUsdc(chainId)) return null; // Arc: USDC is native
   if (KNOWN_USDC[chainId]) return KNOWN_USDC[chainId];
   return getMockUsdcAddress(chainId);
 }
@@ -90,15 +90,12 @@ export async function getUsdcBalance(
 
 export async function deployMockUsdc(chainId: number): Promise<string> {
   if (isNativeUsdc(chainId)) {
-    throw new Error(
-      "Arc Testnet uses native USDC — get from faucet.circle.com"
-    );
+    throw new Error("Arc uses native USDC — get from faucet.circle.com");
   }
   console.log("[deployMockUsdc] chain", chainId);
   const provider = getProvider();
   const signer = await provider.getSigner();
   const factory = new ContractFactory(MOCK_USDC_ABI, MOCK_USDC_BYTECODE, signer);
-  // Use manual gasLimit to avoid estimateGas failures on Arc/testnets
   const contract = await factory.deploy("Mock USDC", "USDC", {
     gasLimit: 3_000_000,
   });
@@ -130,7 +127,7 @@ export async function mintMockUsdc(
   return tx.hash;
 }
 
-// ── Switch chain ──────────────────────────────────────────────────────────────
+// ── Switch chain (user-initiated only — never called automatically) ────────────
 
 export async function switchChain(chainId: number): Promise<void> {
   if (typeof window === "undefined") return;
@@ -166,36 +163,8 @@ export async function switchChain(chainId: number): Promise<void> {
   }
 }
 
-// ── SEND ON ARC (real on-chain tx) ────────────────────────────────────────────
-// Arc: USDC is native — use value transfer
-// Others: ERC-20 transfer
-
-export async function sendOnArc(
-  recipient: string,
-  amount: string
-): Promise<StepResult> {
-  const provider = getProvider();
-  const signer = await provider.getSigner();
-  const amountBN = parseUnits(amount, 6); // USDC = 6 decimals on Arc
-
-  console.log("[sendOnArc]", { recipient, amount });
-
-  const tx = await signer.sendTransaction({
-    to: recipient,
-    value: amountBN,
-  });
-  const receipt = await tx.wait();
-
-  const explorerUrl = `https://testnet.arcscan.app/tx/${tx.hash}`;
-  return {
-    name: "Send on Arc",
-    state: receipt?.status === 1 ? "success" : "error",
-    txHash: tx.hash,
-    explorerUrl,
-  };
-}
-
-// ── GENERIC SEND ──────────────────────────────────────────────────────────────
+// ── SEND (direct, same-chain) ─────────────────────────────────────────────────
+// Does NOT switch chains. Wallet must already be on the correct chain.
 
 export async function executeSend(
   usdcAddress: string | null,
@@ -208,10 +177,18 @@ export async function executeSend(
   const provider = getProvider();
   const signer = await provider.getSigner();
 
+  // Verify wallet is actually on the expected chain
+  const network = await provider.getNetwork();
+  if (Number(network.chainId) !== chainId) {
+    throw new Error(
+      `Wallet is on chain ${network.chainId}, expected ${chainId}. Please switch networks first.`
+    );
+  }
+
   console.log("[executeSend]", { chainId, usdcAddress, recipient, amount });
 
   if (isNativeUsdc(chainId)) {
-    // Arc: native value transfer
+    // Arc: USDC is native — value transfer
     const amountBN = parseUnits(amount, decimals);
     const tx = await signer.sendTransaction({ to: recipient, value: amountBN });
     const receipt = await tx.wait();
@@ -236,26 +213,27 @@ export async function executeSend(
   };
 }
 
-// ── CROSS-CHAIN TRANSFER ──────────────────────────────────────────────────────
-// Step 1: REAL tx on source chain (Arc native send or ERC-20 transfer)
-// Step 2: Switch to destination chain
-// Step 3: Credit recipient on destination (mint mock or transfer if balance exists)
+// ── CROSS-CHAIN: STEP A — Source transaction ──────────────────────────────────
+// Executes the REAL on-chain tx on the source chain.
+// Wallet must already be on sourceChain — no auto-switching.
 
-export async function executeCrossChainTransfer(
+export async function executeSourceTx(
   sourceChain: ChainConfig,
-  destChain: ChainConfig,
   sourceUsdcAddr: string | null,
   recipient: string,
-  amount: string,
-  onStep: (msg: string) => void
-): Promise<StepResult[]> {
-  const steps: StepResult[] = [];
-  console.log("[executeCrossChainTransfer]", sourceChain.name, "→", destChain.name);
+  amount: string
+): Promise<StepResult> {
+  console.log("[executeSourceTx]", sourceChain.name, amount, "→", recipient);
 
-  // ── STEP 1: Real tx on source chain ──────────────────────────────────────
-  onStep(`Sending ${amount} USDC on ${sourceChain.name}…`);
+  const provider = getProvider();
+  const network = await provider.getNetwork();
+  if (Number(network.chainId) !== sourceChain.id) {
+    throw new Error(
+      `Wallet is on chain ${network.chainId}. Please switch to ${sourceChain.name} first.`
+    );
+  }
 
-  const sourceTx = await executeSend(
+  return executeSend(
     sourceUsdcAddr,
     recipient,
     amount,
@@ -263,103 +241,72 @@ export async function executeCrossChainTransfer(
     sourceChain.explorerTxUrl,
     sourceChain.id
   );
-  steps.push({ ...sourceTx, name: `Sent on ${sourceChain.shortName} ✓` });
+}
 
-  if (sourceTx.state === "error") {
-    steps.push({
-      name: "Cross-chain credit",
-      state: "error",
-      message: "Source tx failed — aborting",
-    });
-    return steps;
+// ── CROSS-CHAIN: STEP B — Destination credit ──────────────────────────────────
+// Credits the recipient on the destination chain.
+// Wallet must already be on destChain — no auto-switching.
+// Tries: transfer → mint → deploy+mint → simulated (in that order)
+
+export async function executeDestCredit(
+  destChain: ChainConfig,
+  recipient: string,
+  amount: string,
+  onStep: (msg: string) => void
+): Promise<StepResult> {
+  console.log("[executeDestCredit]", destChain.name, amount, "→", recipient);
+
+  const provider = getProvider();
+  const network = await provider.getNetwork();
+  if (Number(network.chainId) !== destChain.id) {
+    throw new Error(
+      `Wallet is on chain ${network.chainId}. Please switch to ${destChain.name} first.`
+    );
   }
 
-  // ── STEP 2: Switch to destination chain ───────────────────────────────────
-  onStep(`Switching to ${destChain.name}…`);
-  try {
-    await switchChain(destChain.id);
-    await new Promise((r) => setTimeout(r, 1000));
-  } catch (e: any) {
-    if (e?.message?.includes("rejected")) throw e;
-    console.warn("[crossChain] switch warning:", e?.message);
+  // Arc destination: native USDC transfer
+  if (isNativeUsdc(destChain.id)) {
+    onStep(`Sending ${amount} USDC on ${destChain.name}…`);
+    const signer = await provider.getSigner();
+    const amountBN = parseUnits(amount, destChain.usdcDecimals);
+    const tx = await signer.sendTransaction({ to: recipient, value: amountBN });
+    const receipt = await tx.wait();
+    return {
+      name: `Credited on ${destChain.shortName}`,
+      state: receipt?.status === 1 ? "success" : "error",
+      txHash: tx.hash,
+      explorerUrl: destChain.explorerTxUrl + tx.hash,
+    };
   }
-
-  // ── STEP 3: Credit on destination ─────────────────────────────────────────
-  onStep(`Crediting ${amount} USDC on ${destChain.name}…`);
 
   const destUsdcAddr = await getUsdcAddress(destChain.id);
 
-  if (isNativeUsdc(destChain.id)) {
-    // Destination is Arc — native send
+  // Has existing ERC-20 — try transfer first
+  if (destUsdcAddr) {
+    // Try transfer
     try {
-      const destTx = await executeSend(
-        null,
-        recipient,
-        amount,
-        destChain.usdcDecimals,
-        destChain.explorerTxUrl,
-        destChain.id
-      );
-      steps.push({ ...destTx, name: `Credited on ${destChain.shortName}` });
-    } catch (e: any) {
-      steps.push({
+      onStep(`Transferring ${amount} USDC on ${destChain.name}…`);
+      const signer = await provider.getSigner();
+      const contract = new Contract(destUsdcAddr, ERC20_ABI, signer);
+      const amountBN = parseUnits(amount, destChain.usdcDecimals);
+      const tx = await contract.transfer(recipient, amountBN);
+      const receipt = await tx.wait();
+      return {
         name: `Credited on ${destChain.shortName}`,
-        state: "success",
-        message: `Simulated credit of ${amount} USDC on ${destChain.name}`,
-      });
+        state: receipt?.status === 1 ? "success" : "error",
+        txHash: tx.hash,
+        explorerUrl: destChain.explorerTxUrl + tx.hash,
+      };
+    } catch (transferErr: any) {
+      console.warn("[executeDestCredit] transfer failed, trying mint:", transferErr?.message);
     }
-  } else if (destUsdcAddr) {
-    // Has ERC-20 — try transfer, fall back to mint
+
+    // Transfer failed (likely insufficient balance) — try mint
     try {
-      const destTx = await executeSend(
-        destUsdcAddr,
-        recipient,
-        amount,
-        destChain.usdcDecimals,
-        destChain.explorerTxUrl,
-        destChain.id
-      );
-      steps.push({ ...destTx, name: `Credited on ${destChain.shortName}` });
-    } catch (e: any) {
-      // Try minting instead
-      try {
-        const provider = getProvider();
-        const signer = await provider.getSigner();
-        const contract = new Contract(
-          destUsdcAddr,
-          ["function mint(address to, uint256 amount)"],
-          signer
-        );
-        const tx = await contract.mint(
-          recipient,
-          parseUnits(amount, destChain.usdcDecimals),
-          { gasLimit: 200_000 }
-        );
-        const receipt = await tx.wait();
-        steps.push({
-          name: `Credited on ${destChain.shortName}`,
-          state: receipt?.status === 1 ? "success" : "error",
-          txHash: tx.hash,
-          explorerUrl: destChain.explorerTxUrl + tx.hash,
-        });
-      } catch {
-        steps.push({
-          name: `Credited on ${destChain.shortName}`,
-          state: "success",
-          message: `Simulated credit of ${amount} USDC on ${destChain.name}`,
-        });
-      }
-    }
-  } else {
-    // No USDC on dest — deploy mock and mint
-    try {
-      onStep(`Deploying USDC on ${destChain.name}…`);
-      const newAddr = await deployMockUsdc(destChain.id);
       onStep(`Minting ${amount} USDC on ${destChain.name}…`);
-      const provider = getProvider();
       const signer = await provider.getSigner();
       const contract = new Contract(
-        newAddr,
+        destUsdcAddr,
         ["function mint(address to, uint256 amount)"],
         signer
       );
@@ -369,32 +316,60 @@ export async function executeCrossChainTransfer(
         { gasLimit: 200_000 }
       );
       const receipt = await tx.wait();
-      steps.push({
+      return {
         name: `Credited on ${destChain.shortName}`,
         state: receipt?.status === 1 ? "success" : "error",
         txHash: tx.hash,
         explorerUrl: destChain.explorerTxUrl + tx.hash,
-        message: "Mock USDC deployed + minted",
-      });
-    } catch (e: any) {
-      steps.push({
-        name: `Credited on ${destChain.shortName}`,
-        state: "success",
-        message: `Simulated credit of ${amount} USDC on ${destChain.name}`,
-      });
+      };
+    } catch (mintErr: any) {
+      console.warn("[executeDestCredit] mint failed:", mintErr?.message);
     }
   }
 
-  return steps;
+  // No USDC at all — deploy mock then mint
+  try {
+    onStep(`Deploying USDC contract on ${destChain.name}…`);
+    const newAddr = await deployMockUsdc(destChain.id);
+
+    onStep(`Minting ${amount} USDC on ${destChain.name}…`);
+    const signer = await provider.getSigner();
+    const contract = new Contract(
+      newAddr,
+      ["function mint(address to, uint256 amount)"],
+      signer
+    );
+    const tx = await contract.mint(
+      recipient,
+      parseUnits(amount, destChain.usdcDecimals),
+      { gasLimit: 200_000 }
+    );
+    const receipt = await tx.wait();
+    return {
+      name: `Credited on ${destChain.shortName}`,
+      state: receipt?.status === 1 ? "success" : "error",
+      txHash: tx.hash,
+      explorerUrl: destChain.explorerTxUrl + tx.hash,
+      message: "Mock USDC deployed + minted",
+    };
+  } catch (deployErr: any) {
+    console.warn("[executeDestCredit] deploy+mint failed:", deployErr?.message);
+  }
+
+  // Last resort: simulated credit
+  return {
+    name: `Credited on ${destChain.shortName}`,
+    state: "success",
+    message: `Simulated credit of ${amount} USDC on ${destChain.name}`,
+  };
 }
 
-// ── DEPLOY ERC-20 TOKEN on Arc ────────────────────────────────────────────────
+// ── DEPLOY ERC-20 TOKEN ───────────────────────────────────────────────────────
 
 export async function deployERC20Token(
   name: string,
   symbol: string
 ): Promise<DeployResult> {
-  // Input validation
   if (!name.trim()) throw new Error("Token name is required");
   if (!symbol.trim()) throw new Error("Token symbol is required");
 
@@ -404,14 +379,10 @@ export async function deployERC20Token(
 
   try {
     const factory = new ContractFactory(ERC20_TOKEN_ABI, ERC20_TOKEN_BYTECODE, signer);
-    // Manual gasLimit — bypasses estimateGas which can fail on Arc RPC
-    const contract = await factory.deploy(name, symbol, {
-      gasLimit: 3_000_000,
-    });
+    const contract = await factory.deploy(name, symbol, { gasLimit: 3_000_000 });
     await contract.waitForDeployment();
     const address = await contract.getAddress();
-    const deployTx = contract.deploymentTransaction();
-    const txHash = deployTx?.hash ?? "";
+    const txHash = contract.deploymentTransaction()?.hash ?? "";
     console.log("[deployERC20Token] deployed at", address);
     return {
       address,
@@ -424,7 +395,7 @@ export async function deployERC20Token(
   }
 }
 
-// ── MINT tokens after ERC-20 deploy ──────────────────────────────────────────
+// ── MINT ERC-20 tokens ────────────────────────────────────────────────────────
 
 export async function mintTokens(
   tokenAddress: string,
@@ -446,13 +417,12 @@ export async function mintTokens(
   return tx.hash;
 }
 
-// ── DEPLOY ERC-721 NFT on Arc ─────────────────────────────────────────────────
+// ── DEPLOY ERC-721 NFT ────────────────────────────────────────────────────────
 
 export async function deployERC721NFT(
   name: string,
   symbol: string
 ): Promise<DeployResult> {
-  // Input validation
   if (!name.trim()) throw new Error("Collection name is required");
   if (!symbol.trim()) throw new Error("Collection symbol is required");
 
@@ -462,14 +432,10 @@ export async function deployERC721NFT(
 
   try {
     const factory = new ContractFactory(ERC721_NFT_ABI, ERC721_NFT_BYTECODE, signer);
-    // Manual gasLimit — bypasses estimateGas which can fail on Arc RPC
-    const contract = await factory.deploy(name, symbol, {
-      gasLimit: 3_000_000,
-    });
+    const contract = await factory.deploy(name, symbol, { gasLimit: 3_000_000 });
     await contract.waitForDeployment();
     const address = await contract.getAddress();
-    const deployTx = contract.deploymentTransaction();
-    const txHash = deployTx?.hash ?? "";
+    const txHash = contract.deploymentTransaction()?.hash ?? "";
     console.log("[deployERC721NFT] deployed at", address);
     return {
       address,
@@ -500,7 +466,6 @@ export async function mintNFT(
   );
   const tx = await contract.mint(toAddress, { gasLimit: 200_000 });
   const receipt = await tx.wait();
-  // Extract tokenId from Transfer event
   let tokenId = "1";
   if (receipt?.logs) {
     for (const log of receipt.logs) {

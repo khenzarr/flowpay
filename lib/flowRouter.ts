@@ -1,36 +1,42 @@
 import { ARC_CHAIN_ID } from "./contracts";
 
 export type RouteStep = "send" | "bridge";
+export type TransferMode = "direct" | "cross-chain";
 
 export interface FlowRoute {
   steps: RouteStep[];
   needsBridge: boolean;
-  isArcOptimized: boolean; // true when Arc is source or destination
-  label: string;           // human-readable route description
+  isArcOptimized: boolean;
+  mode: TransferMode;
+  label: string;
 }
 
+// Pure function — no side effects, no chain switching
+// User controls source/dest; this just describes what will happen
 export function determineRoute(
   sourceChainId: number,
   destChainId: number
 ): FlowRoute {
   const sameChain = sourceChainId === destChainId;
-  const arcInvolved = sourceChainId === ARC_CHAIN_ID || destChainId === ARC_CHAIN_ID;
+  const arcInvolved =
+    sourceChainId === ARC_CHAIN_ID || destChainId === ARC_CHAIN_ID;
 
   if (sameChain) {
     return {
       steps: ["send"],
       needsBridge: false,
       isArcOptimized: arcInvolved,
+      mode: "direct",
       label: arcInvolved ? "Direct send on Arc" : "Direct send",
     };
   }
 
-  // Cross-chain: bridge + send on destination
   return {
     steps: ["bridge", "send"],
     needsBridge: true,
     isArcOptimized: arcInvolved,
-    label: arcInvolved ? "Arc Optimized Bridge" : "Cross-chain Bridge",
+    mode: "cross-chain",
+    label: arcInvolved ? "Arc Optimized Bridge" : "Cross-chain Transfer",
   };
 }
 
