@@ -73,7 +73,7 @@ Most cross-chain tools hide the complexity. FlowPay exposes it cleanly.
 - Transaction hash returned immediately
 - You see it on the explorer before anything else happens
 
-**Step 2 — Destination Credit (user-confirmed)**
+**Step 2 —> Destination Credit (user-confirmed)**
 - UI pauses and waits for you
 - You switch your wallet to the destination chain manually
 - You click "Complete Transfer"
@@ -124,13 +124,17 @@ FlowPay is not just a payment UI. The Deploy tab lets you launch tokens and NFTs
 
 ## 📸 Demo
 
-> Screenshots and video walkthrough coming soon.
+<img width="553" height="723" alt="image" src="https://github.com/user-attachments/assets/2e18ad33-b1b4-4542-b1e4-9a85d294df5a" />
+
+<img width="593" height="812" alt="image" src="https://github.com/user-attachments/assets/48780b79-d244-499d-80e0-5d3e28e0c234" />
+
+
 > Live demo: deploy locally in 2 minutes (see below).
 
 **Key screens:**
 - Send tab: FROM/TO chain selector with swap button, fee breakdown, route preview
 - Cross-chain: 2-step flow with step-1 confirmation panel
-- Deploy tab: ERC-20 token creator, NFT deployer — both on Arc
+- Deploy tab: ERC-20 token creator, NFT deployer both on Arc
 
 ---
 
@@ -299,7 +303,7 @@ Open a PR. Keep it focused. Explain the why.
 
 ## 📣 Build With It
 
-⭐ **Star the repo** if you find it useful — it helps others discover it.
+⭐ **Star the repo** if you find it useful it helps others discover it.
 
 🐦 **Share on X** —> tag [@cryptokhenzar](https://x.com/cryptokhenzar) if you build something with it.
 
