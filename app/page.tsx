@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ConnectWallet } from "@/components/ConnectWallet";
 import { SendForm } from "@/components/SendForm";
 import { DeployTab } from "@/components/DeployTab";
+import { GMStreak } from "@/components/GMStreak";
 
 type Tab = "send" | "deploy";
 
@@ -33,7 +34,10 @@ export default function Home() {
             </span>
           </div>
         </div>
-        <ConnectWallet />
+        <div className="flex items-center gap-2">
+          <GMStreak />
+          <ConnectWallet />
+        </div>
       </header>
 
       {/* Main */}

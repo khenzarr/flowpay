@@ -1,91 +1,80 @@
+// ── Wagmi config — built from chain registry, no duplication ─────────────────
+// All chain data (IDs, RPCs, names) comes from lib/chains.ts
+
 import { createConfig, http } from "wagmi";
-import { sepolia, holesky } from "wagmi/chains";
 import { injected, metaMask } from "@wagmi/connectors";
 import { defineChain } from "viem";
+import { sepolia as viemSepolia, holesky as viemHolesky } from "wagmi/chains";
+import { CHAINS } from "./chains";
 
-// ── Arc Testnet ───────────────────────────────────────────────────────────────
-// Source: https://docs.arc.network/arc/references/connect-to-arc
-// Chain ID: 5042002 | Native gas token: USDC
+// ── Build viem chain objects from registry ────────────────────────────────────
+
 export const arcTestnet = defineChain({
-  id: 5042002,
-  name: "Arc Testnet",
-  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+  id: CHAINS.arc.id,
+  name: CHAINS.arc.name,
+  nativeCurrency: CHAINS.arc.nativeCurrency,
   rpcUrls: {
-    default: { http: ["https://rpc.testnet.arc.network"] },
-    public:  { http: ["https://rpc.testnet.arc.network"] },
+    default: { http: [CHAINS.arc.rpcUrl] },
+    public:  { http: [CHAINS.arc.rpcUrl] },
   },
   blockExplorers: {
-    default: { name: "ArcScan", url: "https://testnet.arcscan.app" },
+    default: { name: "ArcScan", url: CHAINS.arc.explorerUrl },
   },
   testnet: true,
 });
 
-// ── Other custom chains ───────────────────────────────────────────────────────
-
 export const lineaSepolia = defineChain({
-  id: 59141,
-  name: "Linea Sepolia",
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: ["https://rpc.sepolia.linea.build"] } },
+  id: CHAINS.lineaSepolia.id,
+  name: CHAINS.lineaSepolia.name,
+  nativeCurrency: CHAINS.lineaSepolia.nativeCurrency,
+  rpcUrls: { default: { http: [CHAINS.lineaSepolia.rpcUrl] } },
   blockExplorers: {
-    default: { name: "Lineascan", url: "https://sepolia.lineascan.build" },
+    default: { name: "Lineascan", url: CHAINS.lineaSepolia.explorerUrl },
   },
   testnet: true,
 });
 
 export const megaEth = defineChain({
-  id: 6342,
-  name: "MegaETH Testnet",
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: ["https://carrot.megaeth.com/rpc"] } },
+  id: CHAINS.megaEth.id,
+  name: CHAINS.megaEth.name,
+  nativeCurrency: CHAINS.megaEth.nativeCurrency,
+  rpcUrls: { default: { http: [CHAINS.megaEth.rpcUrl] } },
   blockExplorers: {
-    default: { name: "MegaExplorer", url: "https://www.megaexplorer.xyz" },
+    default: { name: "MegaExplorer", url: CHAINS.megaEth.explorerUrl },
   },
   testnet: true,
 });
 
 export const monadTestnet = defineChain({
-  id: 10143,
-  name: "Monad Testnet",
-  nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
-  rpcUrls: { default: { http: ["https://testnet-rpc.monad.xyz"] } },
+  id: CHAINS.monad.id,
+  name: CHAINS.monad.name,
+  nativeCurrency: CHAINS.monad.nativeCurrency,
+  rpcUrls: { default: { http: [CHAINS.monad.rpcUrl] } },
   blockExplorers: {
-    default: { name: "MonadExplorer", url: "https://testnet.monadexplorer.com" },
+    default: { name: "MonadExplorer", url: CHAINS.monad.explorerUrl },
   },
   testnet: true,
 });
 
-// ── Wagmi config — Arc Testnet is FIRST (default) ─────────────────────────────
+// ── Wagmi config — Arc first = default ───────────────────────────────────────
 
 export const wagmiConfig = createConfig({
-  chains: [arcTestnet, sepolia, holesky, lineaSepolia, megaEth, monadTestnet],
+  chains: [arcTestnet, viemSepolia, viemHolesky, lineaSepolia, megaEth, monadTestnet],
   connectors: [
     injected({ target: "metaMask" }),
     metaMask(),
     injected(),
   ],
   transports: {
-    [arcTestnet.id]:    http("https://rpc.testnet.arc.network"),
-    [sepolia.id]:       http("https://rpc.sepolia.org"),
-    [holesky.id]:       http("https://ethereum-holesky.publicnode.com"),
-    [lineaSepolia.id]:  http("https://rpc.sepolia.linea.build"),
-    [megaEth.id]:       http("https://carrot.megaeth.com/rpc"),
-    [monadTestnet.id]:  http("https://testnet-rpc.monad.xyz"),
+    [CHAINS.arc.id]:          http(CHAINS.arc.rpcUrl),
+    [CHAINS.sepolia.id]:      http(CHAINS.sepolia.rpcUrl),
+    [CHAINS.holesky.id]:      http(CHAINS.holesky.rpcUrl),
+    [CHAINS.lineaSepolia.id]: http(CHAINS.lineaSepolia.rpcUrl),
+    [CHAINS.megaEth.id]:      http(CHAINS.megaEth.rpcUrl),
+    [CHAINS.monad.id]:        http(CHAINS.monad.rpcUrl),
   },
   ssr: true,
 });
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-export const chainIdToName: Record<number, string> = {
-  5042002: "Arc",
-  11155111: "Sepolia",
-  17000: "Holesky",
-  59141: "Linea Sep.",
-  6342: "MegaETH",
-  10143: "Monad",
-};
-
-export const SUPPORTED_CHAIN_IDS = [5042002, 11155111, 17000, 59141, 6342, 10143];
-
-export const ARC_CHAIN_ID = 5042002;
+// Re-export constants from registry (no duplication)
+export { ARC_CHAIN_ID, SUPPORTED_CHAIN_IDS } from "./chains";

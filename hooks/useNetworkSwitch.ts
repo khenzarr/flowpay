@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react";
 import { useChainId, useSwitchChain } from "wagmi";
-import { switchChain as metamaskSwitchChain } from "@/lib/txEngine";
-import { SUPPORTED_CHAIN_IDS, ARC_CHAIN_ID } from "@/lib/wagmi";
+import { SUPPORTED_CHAIN_IDS, ARC_CHAIN_ID } from "@/lib/chains";
+import { switchToChain } from "@/lib/network";
 
 export function useNetworkSwitch() {
   const chainId = useChainId();
@@ -16,10 +16,12 @@ export function useNetworkSwitch() {
     async (targetChainId: number) => {
       setSwitching(true);
       try {
+        // Try wagmi first (updates React state reactively)
+        // Fall back to direct MetaMask call via network.ts
         try {
           await wagmiSwitch({ chainId: targetChainId });
         } catch {
-          await metamaskSwitchChain(targetChainId);
+          await switchToChain(targetChainId);
         }
       } finally {
         setSwitching(false);
@@ -28,5 +30,5 @@ export function useNetworkSwitch() {
     [wagmiSwitch]
   );
 
-  return { chainId, isSupported, switching, switchTo };
+  return { chainId, isSupported, switching, switchTo, ARC_CHAIN_ID };
 }

@@ -12,6 +12,7 @@ import {
   isNativeUsdc,
 } from "./contracts";
 import { getChainById, ChainConfig } from "./chains";
+import { assertChain, switchToChain } from "./network";
 import { MOCK_USDC_ABI, MOCK_USDC_BYTECODE } from "./mockUsdcArtifact";
 import {
   ERC20_TOKEN_ABI,
@@ -127,41 +128,8 @@ export async function mintMockUsdc(
   return tx.hash;
 }
 
-// ── Switch chain (user-initiated only — never called automatically) ────────────
-
-export async function switchChain(chainId: number): Promise<void> {
-  if (typeof window === "undefined") return;
-  const eth = (window as any).ethereum;
-  if (!eth) throw new Error("MetaMask not found");
-  const hexId = "0x" + chainId.toString(16);
-  try {
-    await eth.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: hexId }],
-    });
-  } catch (err: any) {
-    if (err.code === 4902 || err.code === -32603) {
-      const chain = getChainById(chainId);
-      if (!chain) throw new Error("Unknown chain: " + chainId);
-      await eth.request({
-        method: "wallet_addEthereumChain",
-        params: [
-          {
-            chainId: hexId,
-            chainName: chain.name,
-            nativeCurrency: chain.nativeCurrency,
-            rpcUrls: [chain.rpcUrl],
-            blockExplorerUrls: [chain.explorerUrl],
-          },
-        ],
-      });
-    } else if (err.code === 4001) {
-      throw new Error("Network switch rejected by user.");
-    } else {
-      throw err;
-    }
-  }
-}
+// ── Switch chain — re-exported from network.ts ────────────────────────────────
+export { switchToChain as switchChain } from "./network";
 
 // ── SEND (direct, same-chain) ─────────────────────────────────────────────────
 // Does NOT switch chains. Wallet must already be on the correct chain.
@@ -177,13 +145,8 @@ export async function executeSend(
   const provider = getProvider();
   const signer = await provider.getSigner();
 
-  // Verify wallet is actually on the expected chain
-  const network = await provider.getNetwork();
-  if (Number(network.chainId) !== chainId) {
-    throw new Error(
-      `Wallet is on chain ${network.chainId}, expected ${chainId}. Please switch networks first.`
-    );
-  }
+  // Reliable chain check via eth_chainId
+  await assertChain(chainId);
 
   console.log("[executeSend]", { chainId, usdcAddress, recipient, amount });
 
@@ -224,14 +187,7 @@ export async function executeSourceTx(
   amount: string
 ): Promise<StepResult> {
   console.log("[executeSourceTx]", sourceChain.name, amount, "→", recipient);
-
-  const provider = getProvider();
-  const network = await provider.getNetwork();
-  if (Number(network.chainId) !== sourceChain.id) {
-    throw new Error(
-      `Wallet is on chain ${network.chainId}. Please switch to ${sourceChain.name} first.`
-    );
-  }
+  await assertChain(sourceChain.id);
 
   return executeSend(
     sourceUsdcAddr,
@@ -255,16 +211,9 @@ export async function executeDestCredit(
   onStep: (msg: string) => void
 ): Promise<StepResult> {
   console.log("[executeDestCredit]", destChain.name, amount, "→", recipient);
+  await assertChain(destChain.id);
 
   const provider = getProvider();
-  const network = await provider.getNetwork();
-  if (Number(network.chainId) !== destChain.id) {
-    throw new Error(
-      `Wallet is on chain ${network.chainId}. Please switch to ${destChain.name} first.`
-    );
-  }
-
-  // Arc destination: native USDC transfer
   if (isNativeUsdc(destChain.id)) {
     onStep(`Sending ${amount} USDC on ${destChain.name}…`);
     const signer = await provider.getSigner();

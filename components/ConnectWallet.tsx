@@ -2,7 +2,7 @@
 
 import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { useNetworkSwitch } from "@/hooks/useNetworkSwitch";
-import { getChainById } from "@/lib/chains";
+import { getChainById, ARC_CHAIN_ID } from "@/lib/chains";
 
 export function ConnectWallet() {
   const { address, isConnected, isConnecting } = useAccount();
@@ -26,7 +26,7 @@ export function ConnectWallet() {
             <div className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
             <span className="text-xs text-red-300 font-medium">Wrong Network</span>
             <button
-              onClick={() => switchTo(5042002)}
+              onClick={() => switchTo(ARC_CHAIN_ID)}
               disabled={switching}
               className="text-xs text-red-200 underline ml-1 disabled:opacity-50"
             >
