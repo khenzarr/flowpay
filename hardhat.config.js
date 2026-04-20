@@ -1,13 +1,16 @@
-import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
-import dotenv from "dotenv";
-import fs from "fs";
-import path from "path";
+"use strict";
+/**
+ * Hardhat configuration — CommonJS format.
+ * No TypeScript, no ESM, no import.meta — fully deterministic on Node 18-22.
+ */
+
+require("@nomicfoundation/hardhat-toolbox");
+
+const fs     = require("fs");
+const path   = require("path");
+const dotenv = require("dotenv");
 
 // ── Load env ──────────────────────────────────────────────────────────────────
-// Use process.cwd() — always resolves to project root regardless of module mode.
-// NEVER log or print the private key.
-
 const cwd          = process.cwd();
 const envLocalPath = path.join(cwd, ".env.local");
 const envPath      = path.join(cwd, ".env");
@@ -21,8 +24,10 @@ if (fs.existsSync(envLocalPath)) {
 }
 
 // ── Private key — read once, never logged ─────────────────────────────────────
-const rawKey    = process.env.DEPLOYER_PRIVATE_KEY?.trim() ?? "";
-const PRIVATE_KEY = rawKey.startsWith("0x") ? rawKey : rawKey ? `0x${rawKey}` : "";
+const rawKey     = (process.env.DEPLOYER_PRIVATE_KEY || "").trim();
+const PRIVATE_KEY = rawKey
+  ? (rawKey.startsWith("0x") ? rawKey : "0x" + rawKey)
+  : "";
 
 if (rawKey && !/^(0x)?[0-9a-fA-F]{64}$/.test(rawKey)) {
   console.error("[hardhat] ERROR: DEPLOYER_PRIVATE_KEY has invalid format (expected 64 hex chars).");
@@ -31,7 +36,8 @@ if (rawKey && !/^(0x)?[0-9a-fA-F]{64}$/.test(rawKey)) {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const config: HardhatUserConfig = {
+/** @type {import("hardhat/config").HardhatUserConfig} */
+const config = {
   solidity: {
     version: "0.8.20",
     settings: { optimizer: { enabled: true, runs: 200 } },
@@ -57,4 +63,4 @@ const config: HardhatUserConfig = {
   },
 };
 
-export default config;
+module.exports = config;
