@@ -5,10 +5,18 @@ import { createPortal } from "react-dom";
 import { useAccount, useChainId } from "wagmi";
 import { useStreak, MILESTONES, BONUS_POINTS, StreakView } from "@/hooks/useStreak";
 import { formatCountdown, msUntilUTCMidnight } from "@/lib/time";
-import { sendGMTransaction, ARC_CHAIN_ID, GMContractNotDeployedError, GMCooldownError } from "@/lib/gmTx";
+import {
+  sendGMTransaction,
+  claimGMNFT,
+  getNFTClaimState,
+  NFTClaimState,
+  ARC_CHAIN_ID,
+  GMContractNotDeployedError,
+  GMAlreadyTodayError,
+} from "@/lib/gmTx";
 import { switchToChain } from "@/lib/network";
-import { deployGMContract } from "@/lib/deployGM";
-import { hasGMContract } from "@/lib/getGMContract";
+import { deployGMEngine } from "@/lib/deployGMEngine";
+import { hasGMContract, hasBothContracts } from "@/lib/getGMContract";
 
 // ── Milestone config ──────────────────────────────────────────────────────────
 
@@ -104,19 +112,27 @@ export function GMStreak() {
   const [sending, setSending] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [contractReady, setContractReady] = useState(false);
-  const [deployResult, setDeployResult] = useState<{ address: string; url: string } | null>(null);
+  const [deployResult, setDeployResult] = useState<{ gmCore: string; gmNft: string } | null>(null);
   const [txResult, setTxResult] = useState<{ hash: string; url: string; streak?: number } | null>(null);
   const [justEarned, setJustEarned] = useState<{ points: number; bonus: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nftState, setNftState] = useState<NFTClaimState | null>(null);
+  const [claiming, setClaiming] = useState<number | null>(null); // milestone being claimed
+  const [claimResult, setClaimResult] = useState<{ milestone: number; tokenId?: number; url: string } | null>(null);
 
   const handleOpen = useCallback(() => {
     setTxResult(null);
     setError(null);
     setJustEarned(null);
     setDeployResult(null);
+    setClaimResult(null);
     setContractReady(hasGMContract());
     setOpen(true);
-  }, []);
+    // Load NFT claim state in background
+    if (address && isConnected) {
+      getNFTClaimState(address).then(setNftState).catch(() => {});
+    }
+  }, [address, isConnected]);
 
   const handleClose = useCallback(() => setOpen(false), []);
 
@@ -134,17 +150,15 @@ export function GMStreak() {
       const bonusBefore = view.isBonus;
 
       const result = await sendGMTransaction(address);
-
-      // Record in wallet-scoped storage (UTC day-based)
       recordGM(Date.now());
-
       setTxResult({ hash: result.txHash, url: result.explorerUrl, streak: result.streak });
       setJustEarned({ points: pointsBefore, bonus: bonusBefore });
+      // Refresh NFT claim state after GM
+      getNFTClaimState(address).then(setNftState).catch(() => {});
     } catch (e: any) {
       if (e?.code === "CONTRACT_NOT_DEPLOYED") {
         setContractReady(false);
-      } else if (e?.code === "COOLDOWN_ACTIVE") {
-        // On-chain cooldown active — sync local state so UI reflects reality
+      } else if (e?.code === "ALREADY_GM_TODAY") {
         recordGM(Date.now());
         setError(e.message);
       } else {
@@ -162,13 +176,29 @@ export function GMStreak() {
     setDeploying(true);
     setError(null);
     try {
-      const result = await deployGMContract();
-      setDeployResult({ address: result.address, url: result.explorerUrl });
+      const result = await deployGMEngine();
+      setDeployResult({ gmCore: result.gmCore.address, gmNft: result.gmNft.address });
       setContractReady(true);
     } catch (e: any) {
       setError(e?.message ?? "Deployment failed");
     } finally {
       setDeploying(false);
+    }
+  }
+
+  async function handleClaim(milestone: 7 | 30 | 90) {
+    if (!isConnected || !onArc || claiming) return;
+    setClaiming(milestone);
+    setError(null);
+    setClaimResult(null);
+    try {
+      const result = await claimGMNFT(milestone);
+      setClaimResult({ milestone, tokenId: result.tokenId, url: result.explorerUrl });
+      if (address) getNFTClaimState(address).then(setNftState).catch(() => {});
+    } catch (e: any) {
+      setError(e?.message ?? "Claim failed");
+    } finally {
+      setClaiming(null);
     }
   }
 
@@ -369,20 +399,10 @@ export function GMStreak() {
               {/* Deploy success */}
               {deployResult && (
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-emerald-400">
-                    ✓ Contract deployed
-                  </p>
-                  <a
-                    href={deployResult.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block text-[11px] font-mono text-violet-400 hover:text-violet-300 underline truncate"
-                  >
-                    {deployResult.address}
-                  </a>
-                  <p className="text-[10px] text-white/30">
-                    You can now send GM every day.
-                  </p>
+                  <p className="text-xs font-semibold text-emerald-400">✓ Contracts deployed</p>
+                  <p className="text-[10px] text-white/40">GMCore: <span className="font-mono text-white/60">{deployResult.gmCore.slice(0,10)}…</span></p>
+                  <p className="text-[10px] text-white/40">GMNFT:  <span className="font-mono text-white/60">{deployResult.gmNft.slice(0,10)}…</span></p>
+                  <p className="text-[10px] text-white/30">You can now send GM every day and claim milestone NFTs.</p>
                 </div>
               )}
 
@@ -509,6 +529,76 @@ export function GMStreak() {
                   })}
                 </div>
               </div>
+
+              {/* NFT Claim section */}
+              {isConnected && onArc && contractReady && (
+                <div className="pt-1 space-y-2">
+                  <p className="text-[10px] text-white/25 uppercase tracking-widest">
+                    Milestone NFTs
+                  </p>
+                  {([7, 30, 90] as const).map((m) => {
+                    const nftLabels: Record<number, { emoji: string; name: string; color: string }> = {
+                      7:  { emoji: "🥉", name: "Bronze GM Badge", color: "from-amber-700/30 to-amber-600/20 border-amber-700/30 text-amber-400" },
+                      30: { emoji: "🥈", name: "Silver GM Badge", color: "from-slate-400/20 to-slate-300/10 border-slate-400/30 text-slate-300" },
+                      90: { emoji: "🥇", name: "Gold GM Badge",   color: "from-yellow-500/20 to-yellow-400/10 border-yellow-500/30 text-yellow-300" },
+                    };
+                    const cfg = nftLabels[m];
+                    const eligible = nftState ? (m === 7 ? nftState.eligible7 : m === 30 ? nftState.eligible30 : nftState.eligible90) : streak >= m;
+                    const alreadyClaimed = nftState ? (m === 7 ? nftState.claimed7 : m === 30 ? nftState.claimed30 : nftState.claimed90) : false;
+                    const isClaiming = claiming === m;
+
+                    return (
+                      <div
+                        key={m}
+                        className={`flex items-center justify-between rounded-xl bg-gradient-to-r border px-3 py-2.5 ${cfg.color}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{cfg.emoji}</span>
+                          <div>
+                            <p className="text-xs font-semibold text-white/80">{cfg.name}</p>
+                            <p className="text-[10px] text-white/35">{m}-day streak required</p>
+                          </div>
+                        </div>
+                        {alreadyClaimed ? (
+                          <span className="text-[10px] text-emerald-400 font-semibold">✓ Claimed</span>
+                        ) : eligible ? (
+                          <button
+                            onClick={() => handleClaim(m)}
+                            disabled={!!claiming}
+                            className="text-xs font-semibold bg-white/10 hover:bg-white/20 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-all"
+                          >
+                            {isClaiming ? (
+                              <span className="flex items-center gap-1">
+                                <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                                Claiming…
+                              </span>
+                            ) : "Claim"}
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-white/25">{m - streak}d left</span>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Claim success */}
+                  {claimResult && (
+                    <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2.5 space-y-1">
+                      <p className="text-xs font-semibold text-emerald-400">
+                        🎉 NFT #{claimResult.tokenId} claimed!
+                      </p>
+                      <a
+                        href={claimResult.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-violet-400 underline"
+                      >
+                        View on explorer ↗
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </ModalPortal>

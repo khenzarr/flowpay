@@ -1,12 +1,12 @@
-// GM transaction — calls GM.sol contract on Arc Testnet
-// Contract: contracts/GM.sol  |  ABI: lib/gmAbi.ts
-// Address resolution: env → localStorage (no crash if missing)
+// GM transaction layer — calls GMCore.sol on Arc Testnet
+// Contracts: GMCore (streak) + GMNFT (milestone rewards)
 
 import { BrowserProvider, Contract, Interface } from "ethers";
 import { ARC_CHAIN_ID } from "./chains";
 import { getCurrentChainId, assertChain } from "./network";
-import { GM_ABI } from "./gmAbi";
-import { resolveGMAddress } from "./getGMContract";
+import { GM_CORE_ABI } from "./gmCoreAbi";
+import { GM_NFT_ABI }  from "./gmNftAbi";
+import { getGMCoreAddress, getGMNFTAddress } from "./contractRegistry";
 
 export { ARC_CHAIN_ID };
 export { getCurrentChainId };
@@ -18,20 +18,32 @@ export const ARC_EXPLORER_TX = "https://testnet.arcscan.app/tx/";
 export class GMContractNotDeployedError extends Error {
   code = "CONTRACT_NOT_DEPLOYED" as const;
   constructor() {
-    super("GM contract not deployed yet");
+    super("GM contracts not deployed yet");
     this.name = "GMContractNotDeployedError";
   }
 }
 
-export class GMCooldownError extends Error {
-  code = "COOLDOWN_ACTIVE" as const;
-  constructor(public remainingSeconds: number) {
-    const h = Math.floor(remainingSeconds / 3600);
-    const m = Math.floor((remainingSeconds % 3600) / 60);
-    super(
-      `Cooldown active — ${h}h ${m}m remaining. Come back later!`
-    );
-    this.name = "GMCooldownError";
+export class GMAlreadyTodayError extends Error {
+  code = "ALREADY_GM_TODAY" as const;
+  constructor() {
+    super("Already GM'd today (UTC). Come back tomorrow!");
+    this.name = "GMAlreadyTodayError";
+  }
+}
+
+export class GMNFTAlreadyClaimedError extends Error {
+  code = "ALREADY_CLAIMED" as const;
+  constructor(public milestone: number) {
+    super(`${milestone}-day badge already claimed`);
+    this.name = "GMNFTAlreadyClaimedError";
+  }
+}
+
+export class GMNFTStreakTooLowError extends Error {
+  code = "STREAK_TOO_LOW" as const;
+  constructor(public required: number, public current: number) {
+    super(`Need ${required}-day streak to claim (current: ${current})`);
+    this.name = "GMNFTStreakTooLowError";
   }
 }
 
@@ -43,37 +55,86 @@ export interface GMTxResult {
   streak?: number;
 }
 
-export interface GMOnchainState {
-  lastGM: number;       // unix timestamp, 0 = never
-  streak: number;
-  totalGMs: number;
-  cooldownSecs: number; // 0 = can GM now
+export interface GMClaimResult {
+  txHash: string;
+  explorerUrl: string;
+  tokenId?: number;
+  milestone: number;
 }
 
-// ── On-chain state reader ─────────────────────────────────────────────────────
+export interface GMOnchainState {
+  streak: number;
+  lastGMDay: number;
+  totalGMs: number;
+  canGMToday: boolean;
+}
+
+export interface NFTClaimState {
+  eligible7:  boolean;
+  eligible30: boolean;
+  eligible90: boolean;
+  claimed7:   boolean;
+  claimed30:  boolean;
+  claimed90:  boolean;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getEth() {
+  if (typeof window === "undefined") throw new Error("Not in browser");
+  const eth = (window as any).ethereum;
+  if (!eth) throw new Error("MetaMask not found");
+  return eth;
+}
+
+export function hasGMContracts(): boolean {
+  return !!getGMCoreAddress();
+}
+
+// ── On-chain state readers ────────────────────────────────────────────────────
 
 export async function getGMOnchainState(
   userAddress: string
 ): Promise<GMOnchainState | null> {
-  if (typeof window === "undefined") return null;
-  const address = resolveGMAddress();
-  if (!address) return null;
-
+  const coreAddr = getGMCoreAddress();
+  if (!coreAddr) return null;
   try {
-    const eth = (window as any).ethereum;
-    if (!eth) return null;
-    const provider = new BrowserProvider(eth);
-    const contract = new Contract(address, GM_ABI, provider);
-    const [last, streak, total, remaining] =
+    const provider = new BrowserProvider(getEth());
+    const contract = new Contract(coreAddr, GM_CORE_ABI, provider);
+    const [streak, lastDay, total, canGM] =
       await contract.getUserState(userAddress);
     return {
-      lastGM: Number(last),
-      streak: Number(streak),
-      totalGMs: Number(total),
-      cooldownSecs: Number(remaining),
+      streak:     Number(streak),
+      lastGMDay:  Number(lastDay),
+      totalGMs:   Number(total),
+      canGMToday: Boolean(canGM),
     };
   } catch (e) {
     console.warn("[gmTx] getGMOnchainState failed:", e);
+    return null;
+  }
+}
+
+export async function getNFTClaimState(
+  userAddress: string
+): Promise<NFTClaimState | null> {
+  const nftAddr = getGMNFTAddress();
+  if (!nftAddr) return null;
+  try {
+    const provider = new BrowserProvider(getEth());
+    const contract = new Contract(nftAddr, GM_NFT_ABI, provider);
+    const [e7, e30, e90, c7, c30, c90] =
+      await contract.getClaimState(userAddress);
+    return {
+      eligible7:  Boolean(e7),
+      eligible30: Boolean(e30),
+      eligible90: Boolean(e90),
+      claimed7:   Boolean(c7),
+      claimed30:  Boolean(c30),
+      claimed90:  Boolean(c90),
+    };
+  } catch (e) {
+    console.warn("[gmTx] getNFTClaimState failed:", e);
     return null;
   }
 }
@@ -83,105 +144,143 @@ export async function getGMOnchainState(
 export async function sendGMTransaction(
   _userAddress: string
 ): Promise<GMTxResult> {
-  if (typeof window === "undefined") throw new Error("Not in browser");
+  const eth = getEth();
+  const coreAddr = getGMCoreAddress();
+  if (!coreAddr) throw new GMContractNotDeployedError();
 
-  const eth = (window as any).ethereum;
-  if (!eth) throw new Error("MetaMask not found");
-
-  const contractAddress = resolveGMAddress();
-  if (!contractAddress) throw new GMContractNotDeployedError();
-
-  // Chain validation via eth_chainId
   await assertChain(ARC_CHAIN_ID);
 
   const provider = new BrowserProvider(eth);
-  const signer = await provider.getSigner();
-  const contract = new Contract(contractAddress, GM_ABI, signer);
+  const signer   = await provider.getSigner();
+  const contract = new Contract(coreAddr, GM_CORE_ABI, signer);
 
-  // ── Pre-flight: check cooldown on-chain before sending ────────────────────
-  // Prevents wasted gas on a guaranteed revert
+  // Pre-flight: check canGMToday on-chain
   try {
-    const signerAddress = await signer.getAddress();
-    const remaining: bigint = await contract.cooldownRemaining(signerAddress);
-    if (remaining > 0n) {
-      throw new GMCooldownError(Number(remaining));
-    }
+    const signerAddr = await signer.getAddress();
+    const can: boolean = await contract.canGMToday(signerAddr);
+    if (!can) throw new GMAlreadyTodayError();
   } catch (e) {
-    if (e instanceof GMCooldownError) throw e;
-    // If the read fails (e.g. RPC error), proceed anyway — let the tx fail gracefully
-    console.warn("[gmTx] cooldown pre-check failed, proceeding:", e);
+    if (e instanceof GMAlreadyTodayError) throw e;
+    console.warn("[gmTx] pre-flight check failed, proceeding:", e);
   }
 
-  console.log("[gmTx] Calling gm() on:", contractAddress);
+  console.log("[gmTx] Calling GMCore.gm() on:", coreAddr);
 
   let tx: any;
   try {
-    // Higher gas limit — Arc gas costs differ from Ethereum mainnet
     tx = await contract.gm({ gasLimit: 300_000 });
   } catch (e: any) {
-    // MetaMask rejected or pre-execution revert (estimateGas failed)
-    throw _parseGMError(e, contract.interface);
+    throw _parseCoreError(e, contract.interface);
   }
 
   let receipt: any;
   try {
     receipt = await tx.wait();
   } catch (e: any) {
-    // Transaction mined but reverted — parse custom error from receipt
-    throw _parseGMError(e, contract.interface);
+    throw _parseCoreError(e, contract.interface);
   }
 
   if (!receipt || receipt.status !== 1) {
     throw new Error("GM transaction reverted on-chain");
   }
 
-  // Parse streak from GMSent event
+  // Parse streak from GM event
   let streak: number | undefined;
   for (const log of receipt.logs ?? []) {
     try {
       const parsed = contract.interface.parseLog(log);
-      if (parsed?.name === "GMSent") {
-        streak = Number(parsed.args[2]);
+      if (parsed?.name === "GM") {
+        streak = Number(parsed.args[1]);
         break;
       }
     } catch {}
   }
 
   console.log("[gmTx] GM confirmed:", tx.hash, "streak:", streak);
+  return { txHash: tx.hash, explorerUrl: ARC_EXPLORER_TX + tx.hash, streak };
+}
+
+// ── Claim NFT ─────────────────────────────────────────────────────────────────
+
+export async function claimGMNFT(milestone: 7 | 30 | 90): Promise<GMClaimResult> {
+  const eth = getEth();
+  const nftAddr = getGMNFTAddress();
+  if (!nftAddr) throw new GMContractNotDeployedError();
+
+  await assertChain(ARC_CHAIN_ID);
+
+  const provider = new BrowserProvider(eth);
+  const signer   = await provider.getSigner();
+  const contract = new Contract(nftAddr, GM_NFT_ABI, signer);
+
+  console.log("[gmTx] Claiming GMNFT milestone:", milestone);
+
+  let tx: any;
+  try {
+    tx = await contract.claim(milestone, { gasLimit: 300_000 });
+  } catch (e: any) {
+    throw _parseNFTError(e, contract.interface, milestone);
+  }
+
+  let receipt: any;
+  try {
+    receipt = await tx.wait();
+  } catch (e: any) {
+    throw _parseNFTError(e, contract.interface, milestone);
+  }
+
+  if (!receipt || receipt.status !== 1) {
+    throw new Error("NFT claim reverted on-chain");
+  }
+
+  // Parse tokenId from NFTClaimed event
+  let tokenId: number | undefined;
+  for (const log of receipt.logs ?? []) {
+    try {
+      const parsed = contract.interface.parseLog(log);
+      if (parsed?.name === "NFTClaimed") {
+        tokenId = Number(parsed.args[2]);
+        break;
+      }
+    } catch {}
+  }
+
+  console.log("[gmTx] NFT claimed:", tx.hash, "tokenId:", tokenId);
   return {
-    txHash: tx.hash,
+    txHash:      tx.hash,
     explorerUrl: ARC_EXPLORER_TX + tx.hash,
-    streak,
+    tokenId,
+    milestone,
   };
 }
 
-// ── Error parser — decodes CooldownActive custom error ────────────────────────
+// ── Error parsers ─────────────────────────────────────────────────────────────
 
-function _parseGMError(raw: any, iface: Interface): Error {
-  // Try to decode the CooldownActive(uint256) custom error
+function _parseCoreError(raw: any, iface: Interface): Error {
   try {
-    const data: string | undefined =
-      raw?.data ??
-      raw?.error?.data ??
-      raw?.transaction?.data ??
-      raw?.receipt?.data;
-
+    const data = raw?.data ?? raw?.error?.data;
     if (data && data !== "0x" && data.length >= 10) {
       const decoded = iface.parseError(data);
-      if (decoded?.name === "CooldownActive") {
-        return new GMCooldownError(Number(decoded.args[0]));
-      }
+      if (decoded?.name === "AlreadyGMToday") return new GMAlreadyTodayError();
     }
-  } catch {
-    // decoding failed — fall through
-  }
-
-  // User rejected
-  if (raw?.code === 4001 || raw?.code === "ACTION_REJECTED") {
+  } catch {}
+  if (raw?.code === 4001 || raw?.code === "ACTION_REJECTED")
     return new Error("Transaction rejected by user.");
-  }
+  return new Error(raw?.reason ?? raw?.message ?? "GM transaction failed");
+}
 
-  // Generic fallback with original message
-  const msg: string = raw?.reason ?? raw?.message ?? "GM transaction failed";
-  return new Error(msg);
+function _parseNFTError(raw: any, iface: Interface, milestone: number): Error {
+  try {
+    const data = raw?.data ?? raw?.error?.data;
+    if (data && data !== "0x" && data.length >= 10) {
+      const decoded = iface.parseError(data);
+      if (decoded?.name === "AlreadyClaimed")
+        return new GMNFTAlreadyClaimedError(milestone);
+      if (decoded?.name === "StreakTooLow")
+        return new GMNFTStreakTooLowError(Number(decoded.args[0]), Number(decoded.args[1]));
+    }
+  } catch {}
+  if (raw?.code === 4001 || raw?.code === "ACTION_REJECTED")
+    return new Error("Transaction rejected by user.");
+  return new Error(raw?.reason ?? raw?.message ?? "NFT claim failed");
 }

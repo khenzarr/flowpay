@@ -1,24 +1,19 @@
 // ── Contract Registry ─────────────────────────────────────────────────────────
-// Stores and retrieves deployed contract addresses.
+// Per-chain, per-name address storage.
 // Priority: env var → localStorage → null
-// Per-chain storage so the same app can work across networks.
 
 const STORAGE_PREFIX = "flowpay_contract_";
+const ARC_CHAIN_ID = 5042002;
 
 function storageKey(chainId: number, name: string): string {
   return `${STORAGE_PREFIX}${name}_${chainId}`;
 }
 
-function isValidAddress(addr: unknown): addr is string {
+export function isValidAddress(addr: unknown): addr is string {
   return typeof addr === "string" && /^0x[0-9a-fA-F]{40}$/.test(addr);
 }
 
-// ── Get ───────────────────────────────────────────────────────────────────────
-
-export function getContractAddress(
-  chainId: number,
-  name: string
-): string | null {
+export function getContractAddress(chainId: number, name: string): string | null {
   if (typeof window === "undefined") return null;
   try {
     const stored = localStorage.getItem(storageKey(chainId, name));
@@ -28,49 +23,56 @@ export function getContractAddress(
   }
 }
 
-// ── Set ───────────────────────────────────────────────────────────────────────
-
-export function setContractAddress(
-  chainId: number,
-  name: string,
-  address: string
-): void {
+export function setContractAddress(chainId: number, name: string, address: string): void {
   if (typeof window === "undefined") return;
-  if (!isValidAddress(address)) {
-    console.error("[contractRegistry] Invalid address:", address);
-    return;
-  }
+  if (!isValidAddress(address)) return;
   try {
     localStorage.setItem(storageKey(chainId, name), address);
-    console.log(`[contractRegistry] Saved ${name} on chain ${chainId}:`, address);
-  } catch {
-    // ignore storage errors
-  }
-}
-
-// ── Clear ─────────────────────────────────────────────────────────────────────
-
-export function clearContractAddress(chainId: number, name: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(storageKey(chainId, name));
+    console.log(`[registry] ${name} on chain ${chainId}:`, address);
   } catch {}
 }
 
-// ── GM-specific helpers ───────────────────────────────────────────────────────
+export function clearContractAddress(chainId: number, name: string): void {
+  if (typeof window === "undefined") return;
+  try { localStorage.removeItem(storageKey(chainId, name)); } catch {}
+}
 
-const GM_CONTRACT_NAME = "GM";
-const ARC_CHAIN_ID_LOCAL = 5042002;
+// ── GMCore ────────────────────────────────────────────────────────────────────
+
+export function getGMCoreAddress(): string | null {
+  const env = process.env.NEXT_PUBLIC_GM_CORE_ADDRESS;
+  if (isValidAddress(env)) return env;
+  return getContractAddress(ARC_CHAIN_ID, "GMCore");
+}
+
+export function saveGMCoreAddress(address: string): void {
+  setContractAddress(ARC_CHAIN_ID, "GMCore", address);
+}
+
+// ── GMNFT ─────────────────────────────────────────────────────────────────────
+
+export function getGMNFTAddress(): string | null {
+  const env = process.env.NEXT_PUBLIC_GM_NFT_ADDRESS;
+  if (isValidAddress(env)) return env;
+  return getContractAddress(ARC_CHAIN_ID, "GMNFT");
+}
+
+export function saveGMNFTAddress(address: string): void {
+  setContractAddress(ARC_CHAIN_ID, "GMNFT", address);
+}
+
+// ── Legacy GM (old single contract) — kept for backward compat ───────────────
 
 export function getGMAddress(): string | null {
-  // 1. Environment variable (set after manual deploy)
-  const envAddr = process.env.NEXT_PUBLIC_GM_CONTRACT_ADDRESS;
-  if (isValidAddress(envAddr)) return envAddr;
-
-  // 2. localStorage (set after in-app deploy)
-  return getContractAddress(ARC_CHAIN_ID_LOCAL, GM_CONTRACT_NAME);
+  // New system: GMCore takes precedence
+  const core = getGMCoreAddress();
+  if (core) return core;
+  // Fallback: old single-contract env var
+  const legacy = process.env.NEXT_PUBLIC_GM_CONTRACT_ADDRESS;
+  if (isValidAddress(legacy)) return legacy;
+  return getContractAddress(ARC_CHAIN_ID, "GM");
 }
 
 export function saveGMAddress(address: string): void {
-  setContractAddress(ARC_CHAIN_ID_LOCAL, GM_CONTRACT_NAME, address);
+  setContractAddress(ARC_CHAIN_ID, "GM", address);
 }
