@@ -1,6 +1,19 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+# ── SECRETS — NEVER COMMIT ───────────────────────────────────────────────────
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.staging
+.env*.local
+# .env.example is intentionally NOT listed here — it is safe to commit
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
 /node_modules
 /.pnp
 .pnp.*
@@ -10,37 +23,35 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# ── Testing ───────────────────────────────────────────────────────────────────
 /coverage
 
-# next.js
+# ── Next.js ───────────────────────────────────────────────────────────────────
 /.next/
 /out/
 
-# production
+# ── Production ────────────────────────────────────────────────────────────────
 /build
 
-# misc
+# ── Misc ──────────────────────────────────────────────────────────────────────
 .DS_Store
 *.pem
+Thumbs.db
 
-# debug
+# ── Debug logs ────────────────────────────────────────────────────────────────
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
+# ── Vercel ────────────────────────────────────────────────────────────────────
 .vercel
 
-# typescript
+# ── TypeScript ────────────────────────────────────────────────────────────────
 *.tsbuildinfo
 next-env.d.ts
 
-# hardhat
+# ── Hardhat ───────────────────────────────────────────────────────────────────
 /artifacts/
 /cache/
 /typechain-types/
