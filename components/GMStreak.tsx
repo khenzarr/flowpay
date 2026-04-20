@@ -3,13 +3,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useAccount, useChainId } from "wagmi";
-import { useGMStreak, MILESTONES, BONUS_POINTS } from "@/hooks/useGMStreak";
+import { useStreak, MILESTONES, BONUS_POINTS, StreakView } from "@/hooks/useStreak";
+import { formatCountdown, msUntilUTCMidnight } from "@/lib/time";
 import { sendGMTransaction, ARC_CHAIN_ID, GMContractNotDeployedError, GMCooldownError } from "@/lib/gmTx";
-import { switchChain } from "@/lib/txEngine";
+import { switchToChain } from "@/lib/network";
 import { deployGMContract } from "@/lib/deployGM";
 import { hasGMContract } from "@/lib/getGMContract";
 
 // ── Milestone config ──────────────────────────────────────────────────────────
+
 const MILESTONE_LABELS: Record<number, { emoji: string; label: string }> = {
   7:   { emoji: "🔥", label: "Week Warrior" },
   14:  { emoji: "⚡", label: "Two Weeks Strong" },
@@ -19,44 +21,37 @@ const MILESTONE_LABELS: Record<number, { emoji: string; label: string }> = {
   180: { emoji: "👑", label: "Half-Year King" },
 };
 
-// ── Countdown ─────────────────────────────────────────────────────────────────
-function useCountdown(ms: number): string {
-  const [remaining, setRemaining] = useState(ms);
+// ── Countdown hook ────────────────────────────────────────────────────────────
+
+function useCountdown(): string {
+  const [secs, setSecs] = useState(() =>
+    Math.floor(msUntilUTCMidnight() / 1000)
+  );
   useEffect(() => {
-    setRemaining(ms);
-    const id = setInterval(() => setRemaining((r) => Math.max(0, r - 1000)), 1000);
+    const id = setInterval(
+      () => setSecs(Math.floor(msUntilUTCMidnight() / 1000)),
+      1000
+    );
     return () => clearInterval(id);
-  }, [ms]);
-  const h = Math.floor(remaining / 3_600_000);
-  const m = Math.floor((remaining % 3_600_000) / 60_000);
-  const s = Math.floor((remaining % 60_000) / 1000);
-  return `${h}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`;
+  }, []);
+  return formatCountdown(secs);
 }
 
-function StreakFlame({ count }: { count: number }) {
-  if (count === 0) return <span className="text-2xl">☀️</span>;
-  if (count < 7)   return <span className="text-2xl">🔥</span>;
-  if (count < 30)  return <span className="text-2xl">⚡</span>;
-  return <span className="text-2xl">👑</span>;
-}
+// ── Portal ────────────────────────────────────────────────────────────────────
 
-// ── Portal modal ──────────────────────────────────────────────────────────────
-// Renders into document.body — escapes ALL stacking contexts
-
-interface ModalProps {
+function ModalPortal({
+  onClose,
+  children,
+}: {
   onClose: () => void;
   children: React.ReactNode;
-}
-
-function ModalPortal({ onClose, children }: ModalProps) {
-  // Lock body scroll while open
+}) {
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // ESC key to close
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -66,16 +61,11 @@ function ModalPortal({ onClose, children }: ModalProps) {
   }, [onClose]);
 
   return createPortal(
-    // z-[9999] ensures it's above everything, including backdrop-blur parents
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-      // Backdrop click closes modal
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Backdrop — separate layer so click target is unambiguous */}
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-
-      {/* Modal panel — stopPropagation prevents backdrop click leaking through */}
       <div
         className="relative z-10 w-full max-w-sm"
         onMouseDown={(e) => e.stopPropagation()}
@@ -87,32 +77,37 @@ function ModalPortal({ onClose, children }: ModalProps) {
   );
 }
 
+// ── Streak flame icon ─────────────────────────────────────────────────────────
+
+function StreakIcon({ streak }: { streak: number }) {
+  if (streak === 0) return <>☀️</>;
+  if (streak < 7)   return <>🔥</>;
+  if (streak < 30)  return <>⚡</>;
+  return <>👑</>;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
+
 export function GMStreak() {
   const { address, isConnected } = useAccount();
   const walletChainId = useChainId();
-  const { data, recordCheckIn, hydrated } = useGMStreak();
-  const countdown = useCountdown(data.nextResetMs);
+
+  // Wallet-scoped streak — passes address so different wallets get different data
+  const { view, recordGM, hydrated } = useStreak(
+    isConnected ? address : undefined
+  );
+
+  const countdown = useCountdown();
+  const onArc = walletChainId === ARC_CHAIN_ID;
 
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [deploying, setDeploying] = useState(false);
-  const [deployResult, setDeployResult] = useState<{ address: string; url: string } | null>(null);
-  const [txResult, setTxResult] = useState<{ hash: string; url: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [justEarned, setJustEarned] = useState<{ points: number; bonus: boolean } | null>(null);
   const [contractReady, setContractReady] = useState(false);
-
-  // Check contract status on open
-  useEffect(() => {
-    if (open) setContractReady(hasGMContract());
-  }, [open]);
-
-  const onArc = walletChainId === ARC_CHAIN_ID;
-
-  const handleClose = useCallback(() => {
-    setOpen(false);
-  }, []);
+  const [deployResult, setDeployResult] = useState<{ address: string; url: string } | null>(null);
+  const [txResult, setTxResult] = useState<{ hash: string; url: string; streak?: number } | null>(null);
+  const [justEarned, setJustEarned] = useState<{ points: number; bonus: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleOpen = useCallback(() => {
     setTxResult(null);
@@ -123,27 +118,34 @@ export function GMStreak() {
     setOpen(true);
   }, []);
 
+  const handleClose = useCallback(() => setOpen(false), []);
+
+  // ── Send GM ─────────────────────────────────────────────────────────────────
+
   async function handleGM() {
-    if (!isConnected || !address || data.checkedInToday || sending) return;
+    if (!isConnected || !address || !view?.canGMToday || sending) return;
     setSending(true);
     setError(null);
     setTxResult(null);
     setJustEarned(null);
 
     try {
+      const pointsBefore = view.pointsForNext;
+      const bonusBefore = view.isBonus;
+
       const result = await sendGMTransaction(address);
-      const earnedPoints = data.pointsForNext;
-      const wasBonus = data.isBonus;
-      recordCheckIn(Date.now());
-      setTxResult({ hash: result.txHash, url: result.explorerUrl });
-      setJustEarned({ points: earnedPoints, bonus: wasBonus });
+
+      // Record in wallet-scoped storage (UTC day-based)
+      recordGM(Date.now());
+
+      setTxResult({ hash: result.txHash, url: result.explorerUrl, streak: result.streak });
+      setJustEarned({ points: pointsBefore, bonus: bonusBefore });
     } catch (e: any) {
       if (e?.code === "CONTRACT_NOT_DEPLOYED") {
         setContractReady(false);
       } else if (e?.code === "COOLDOWN_ACTIVE") {
-        // Contract says cooldown is active — sync localStorage to match
-        // so the UI shows "already checked in" state
-        recordCheckIn(Date.now() - 1000); // mark as done without adding points
+        // On-chain cooldown active — sync local state so UI reflects reality
+        recordGM(Date.now());
         setError(e.message);
       } else {
         setError(e?.message ?? "Transaction failed");
@@ -153,16 +155,16 @@ export function GMStreak() {
     }
   }
 
+  // ── Deploy contract ──────────────────────────────────────────────────────────
+
   async function handleDeploy() {
     if (!isConnected || !onArc || deploying) return;
     setDeploying(true);
     setError(null);
-
     try {
       const result = await deployGMContract();
       setDeployResult({ address: result.address, url: result.explorerUrl });
       setContractReady(true);
-      console.log("[GMStreak] GM contract deployed:", result.address);
     } catch (e: any) {
       setError(e?.message ?? "Deployment failed");
     } finally {
@@ -170,33 +172,46 @@ export function GMStreak() {
     }
   }
 
-  // Don't render until localStorage is hydrated (avoids SSR mismatch)
+  // Don't render until hydrated (avoids SSR mismatch)
   if (!hydrated) return null;
 
-  // Current earned milestone
-  const milestone = MILESTONES.filter((m) => m <= data.streakCount).pop() ?? null;
-  const milestoneBadge = milestone ? MILESTONE_LABELS[milestone] : null;
+  // Streak display values — null-safe for disconnected state
+  const streak = view?.currentStreak ?? 0;
+  const totalPoints = view?.totalPoints ?? 0;
+  const canGM = view?.canGMToday ?? false;
+  const pointsForNext = view?.pointsForNext ?? BONUS_POINTS;
+  const isBonus = view?.isBonus ?? false;
+  const lastGMTime = view?.lastGMTime ?? 0;
+  const milestoneNext = view?.milestoneNext ?? null;
+
+  // Highest milestone reached
+  const milestoneReached =
+    MILESTONES.filter((m) => m <= streak).pop() ?? null;
+  const milestoneBadge = milestoneReached
+    ? MILESTONE_LABELS[milestoneReached]
+    : null;
 
   return (
     <>
-      {/* ── Trigger button — stays in normal document flow ── */}
+      {/* ── Trigger button ── */}
       <button
         onClick={handleOpen}
         className="flex items-center gap-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] rounded-full px-3 py-1.5 transition-all group"
         title="GM Streak"
       >
         <span className="text-base leading-none">
-          {data.streakCount > 0 ? "🔥" : "☀️"}
+          <StreakIcon streak={streak} />
         </span>
         <span className="text-xs font-semibold text-white/60 group-hover:text-white/80 transition-colors">
-          {data.streakCount > 0 ? `${data.streakCount}d` : "GM"}
+          {isConnected && streak > 0 ? `${streak}d` : "GM"}
         </span>
-        {data.checkedInToday && (
+        {/* Green dot = already GM'd today */}
+        {isConnected && !canGM && (
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
         )}
       </button>
 
-      {/* ── Modal — rendered via portal directly into document.body ── */}
+      {/* ── Modal ── */}
       {open && (
         <ModalPortal onClose={handleClose}>
           <div className="bg-[#0e0e1a] border border-white/[0.1] rounded-2xl shadow-2xl shadow-black/80 overflow-hidden">
@@ -204,10 +219,14 @@ export function GMStreak() {
             {/* Header */}
             <div className="flex items-center justify-between px-5 pt-5 pb-3">
               <div className="flex items-center gap-2">
-                <StreakFlame count={data.streakCount} />
+                <span className="text-2xl"><StreakIcon streak={streak} /></span>
                 <div>
                   <p className="text-sm font-bold text-white">GM Streak</p>
-                  <p className="text-[10px] text-white/35">Daily check-in on Arc Testnet</p>
+                  <p className="text-[10px] text-white/35">
+                    {isConnected
+                      ? `${address?.slice(0, 6)}…${address?.slice(-4)} · Arc Testnet`
+                      : "Connect wallet to start"}
+                  </p>
                 </div>
               </div>
               <button
@@ -219,37 +238,46 @@ export function GMStreak() {
               </button>
             </div>
 
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-2 px-5 pb-4">
-              {[
-                { value: data.streakCount, label: "Day Streak", color: "text-white" },
-                { value: data.totalPoints, label: "Total Points", color: "text-amber-400" },
-                {
-                  value: data.checkedInToday ? "✓" : `+${data.pointsForNext}`,
-                  label: data.checkedInToday ? "Today" : "Next GM",
-                  color: data.checkedInToday ? "text-emerald-400" : "text-white/60",
-                },
-              ].map(({ value, label, color }) => (
-                <div key={label} className="rounded-xl bg-white/[0.04] border border-white/[0.07] p-3 text-center">
-                  <p className={`text-xl font-bold ${color}`}>{value}</p>
-                  <p className="text-[10px] text-white/35 mt-0.5">{label}</p>
-                </div>
-              ))}
-            </div>
+            {/* Stats — only shown when connected */}
+            {isConnected && (
+              <div className="grid grid-cols-3 gap-2 px-5 pb-4">
+                {[
+                  { value: streak, label: "Day Streak", color: "text-white" },
+                  { value: totalPoints, label: "Total Points", color: "text-amber-400" },
+                  {
+                    value: !canGM ? "✓" : `+${pointsForNext}`,
+                    label: !canGM ? "Today" : "Next GM",
+                    color: !canGM ? "text-emerald-400" : "text-white/60",
+                  },
+                ].map(({ value, label, color }) => (
+                  <div
+                    key={label}
+                    className="rounded-xl bg-white/[0.04] border border-white/[0.07] p-3 text-center"
+                  >
+                    <p className={`text-xl font-bold ${color}`}>{value}</p>
+                    <p className="text-[10px] text-white/35 mt-0.5">{label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Milestone badge */}
             {milestoneBadge && (
               <div className="mx-5 mb-3 rounded-xl bg-violet-500/10 border border-violet-500/20 px-3 py-2 flex items-center gap-2">
                 <span className="text-lg">{milestoneBadge.emoji}</span>
                 <div>
-                  <p className="text-xs font-semibold text-violet-300">{milestoneBadge.label}</p>
-                  <p className="text-[10px] text-white/30">{milestone}-day milestone</p>
+                  <p className="text-xs font-semibold text-violet-300">
+                    {milestoneBadge.label}
+                  </p>
+                  <p className="text-[10px] text-white/30">
+                    {milestoneReached}-day milestone
+                  </p>
                 </div>
               </div>
             )}
 
             {/* Bonus preview */}
-            {!data.checkedInToday && data.isBonus && (
+            {isConnected && canGM && isBonus && (
               <div className="mx-5 mb-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-3 py-2 flex items-center gap-2">
                 <span className="text-lg">🎁</span>
                 <p className="text-xs text-amber-300 font-medium">
@@ -258,19 +286,24 @@ export function GMStreak() {
               </div>
             )}
 
-            {/* Last check-in + countdown */}
-            {data.lastCheckIn && (
+            {/* Last GM + countdown */}
+            {isConnected && lastGMTime > 0 && (
               <div className="mx-5 mb-3 flex items-center justify-between text-[11px] text-white/30">
                 <span>
                   Last GM:{" "}
-                  {new Date(data.lastCheckIn).toLocaleString("en-US", {
-                    month: "short", day: "numeric",
-                    hour: "2-digit", minute: "2-digit",
-                    timeZone: "UTC", timeZoneName: "short",
+                  {new Date(lastGMTime).toLocaleString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    timeZone: "UTC",
+                    timeZoneName: "short",
                   })}
                 </span>
-                {data.checkedInToday && (
-                  <span className="text-white/20 tabular-nums">Resets in {countdown}</span>
+                {!canGM && (
+                  <span className="text-white/20 tabular-nums">
+                    Resets in {countdown}
+                  </span>
                 )}
               </div>
             )}
@@ -290,9 +323,11 @@ export function GMStreak() {
               {/* Wrong network */}
               {isConnected && !onArc && (
                 <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 flex items-center justify-between">
-                  <p className="text-xs text-amber-300">Switch to Arc Testnet to send GM</p>
+                  <p className="text-xs text-amber-300">
+                    Switch to Arc Testnet to send GM
+                  </p>
                   <button
-                    onClick={() => switchChain(ARC_CHAIN_ID)}
+                    onClick={() => switchToChain(ARC_CHAIN_ID)}
                     className="text-xs text-amber-200 underline ml-2 hover:text-amber-100"
                   >
                     Switch
@@ -300,15 +335,17 @@ export function GMStreak() {
                 </div>
               )}
 
-              {/* Contract not deployed — deploy prompt */}
+              {/* Contract not deployed */}
               {isConnected && onArc && !contractReady && !deployResult && (
                 <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-4 space-y-3">
                   <div className="flex items-start gap-2">
                     <span className="text-lg flex-shrink-0">🚀</span>
                     <div>
-                      <p className="text-sm font-semibold text-white">Deploy GM contract</p>
+                      <p className="text-sm font-semibold text-white">
+                        Deploy GM contract
+                      </p>
                       <p className="text-[11px] text-white/40 mt-0.5">
-                        One-time setup. Deploys the GM contract on Arc Testnet so you can send daily GMs on-chain.
+                        One-time setup on Arc Testnet. Enables daily on-chain GMs.
                       </p>
                     </div>
                   </div>
@@ -332,7 +369,9 @@ export function GMStreak() {
               {/* Deploy success */}
               {deployResult && (
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-emerald-400">✓ Contract deployed</p>
+                  <p className="text-xs font-semibold text-emerald-400">
+                    ✓ Contract deployed
+                  </p>
                   <a
                     href={deployResult.url}
                     target="_blank"
@@ -341,14 +380,18 @@ export function GMStreak() {
                   >
                     {deployResult.address}
                   </a>
-                  <p className="text-[10px] text-white/30">You can now send GM every day.</p>
+                  <p className="text-[10px] text-white/30">
+                    You can now send GM every day.
+                  </p>
                 </div>
               )}
 
-              {/* Already checked in today */}
-              {isConnected && onArc && contractReady && data.checkedInToday && !txResult && (
+              {/* Already GM'd today */}
+              {isConnected && onArc && contractReady && !canGM && !txResult && (
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-center space-y-1">
-                  <p className="text-sm font-semibold text-emerald-400">✓ GM sent today</p>
+                  <p className="text-sm font-semibold text-emerald-400">
+                    ✓ GM sent today
+                  </p>
                   <p className="text-[11px] text-white/30">
                     Come back after 00:00 UTC · Resets in {countdown}
                   </p>
@@ -356,7 +399,7 @@ export function GMStreak() {
               )}
 
               {/* Send GM button */}
-              {isConnected && onArc && contractReady && !data.checkedInToday && (
+              {isConnected && onArc && contractReady && canGM && (
                 <button
                   onClick={handleGM}
                   disabled={sending}
@@ -370,29 +413,42 @@ export function GMStreak() {
                   ) : (
                     <span className="flex items-center justify-center gap-2">
                       <span>☀️</span>
-                      Send GM · +{data.pointsForNext} pts
-                      {data.isBonus && (
-                        <span className="text-xs bg-white/20 rounded-full px-1.5 py-0.5">BONUS</span>
+                      Send GM · +{pointsForNext} pts
+                      {isBonus && (
+                        <span className="text-xs bg-white/20 rounded-full px-1.5 py-0.5">
+                          BONUS
+                        </span>
                       )}
                     </span>
                   )}
                 </button>
               )}
 
-              {/* Success */}
+              {/* TX success */}
               {txResult && (
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 space-y-2">
                   <div className="flex items-center gap-2">
                     <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
-                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-3 h-3 text-white"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={3}
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                     </div>
                     <p className="text-sm font-semibold text-emerald-400">
                       GM sent on Arc!
                       {justEarned && (
                         <span className="ml-2 text-amber-400">
-                          +{justEarned.points} pts{justEarned.bonus ? " 🎁" : ""}
+                          +{justEarned.points} pts
+                          {justEarned.bonus ? " 🎁" : ""}
                         </span>
                       )}
                     </p>
@@ -405,11 +461,14 @@ export function GMStreak() {
                   >
                     {txResult.hash}
                   </a>
-                  {data.milestoneReached && MILESTONE_LABELS[data.milestoneReached] && (
+                  {/* Milestone unlocked on this GM */}
+                  {milestoneNext && MILESTONE_LABELS[milestoneNext] && (
                     <div className="flex items-center gap-2 pt-1">
-                      <span className="text-base">{MILESTONE_LABELS[data.milestoneReached].emoji}</span>
+                      <span className="text-base">
+                        {MILESTONE_LABELS[milestoneNext].emoji}
+                      </span>
                       <p className="text-xs font-semibold text-violet-300">
-                        {MILESTONE_LABELS[data.milestoneReached].label} unlocked!
+                        {MILESTONE_LABELS[milestoneNext].label} unlocked!
                       </p>
                     </div>
                   )}
@@ -424,12 +483,14 @@ export function GMStreak() {
                 </div>
               )}
 
-              {/* Milestones */}
+              {/* Milestones row */}
               <div className="pt-1">
-                <p className="text-[10px] text-white/25 uppercase tracking-widest mb-2">Milestones</p>
+                <p className="text-[10px] text-white/25 uppercase tracking-widest mb-2">
+                  Milestones
+                </p>
                 <div className="flex gap-1.5 flex-wrap">
-                  {[7, 14, 30, 60, 90, 180].map((m) => {
-                    const reached = data.streakCount >= m;
+                  {MILESTONES.map((m) => {
+                    const reached = streak >= m;
                     const badge = MILESTONE_LABELS[m];
                     return (
                       <div
