@@ -6,47 +6,44 @@
  *   — or —
  *   npx hardhat run scripts/deploy-gm-engine.ts --network arcTestnet
  *
- * What this script does automatically:
- *   1. Validates DEPLOYER_PRIVATE_KEY is set
+ * Automatically:
+ *   1. Validates DEPLOYER_PRIVATE_KEY
  *   2. Deploys GMCore on Arc Testnet
  *   3. Deploys GMNFT (linked to GMCore)
- *   4. Writes NEXT_PUBLIC_GM_CORE_ADDRESS and NEXT_PUBLIC_GM_NFT_ADDRESS
- *      directly into .env.local — no manual copy-paste needed
+ *   4. Writes addresses into .env.local — no manual copy-paste
  *
- * Security guarantees:
+ * Security:
  *   - NEVER reads, writes, or logs DEPLOYER_PRIVATE_KEY
  *   - Only NEXT_PUBLIC_* addresses are written to .env.local
- *   - .env.local is gitignored and never committed
  */
 
 import { ethers, network } from "hardhat";
-import * as path from "path";
+import path from "path";
+import { createRequire } from "module";
 
-// Plain JS util — no ts-node needed at runtime
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { updateEnv } = require("./updateEnv");
+// Use createRequire so we can require() a CJS module from a TS file
+// that Hardhat compiles — avoids __dirname / import.meta issues
+const require_ = createRequire(import.meta.url ?? __filename);
+const { updateEnv } = require_(path.join(process.cwd(), "scripts", "updateEnv.js"));
 
-const ENV_LOCAL = path.resolve(__dirname, "../.env.local");
+const ENV_LOCAL = path.join(process.cwd(), ".env.local");
 
 async function main() {
-  // ── 1. Validate private key is present ───────────────────────────────────
+  // ── Validate key ──────────────────────────────────────────────────────────
   if (!process.env.DEPLOYER_PRIVATE_KEY?.trim()) {
     console.error(`
 ╔══════════════════════════════════════════════════════════════╗
 ║  ✗  DEPLOYER_PRIVATE_KEY is not set                          ║
 ╚══════════════════════════════════════════════════════════════╝
 
-  Steps to fix:
-    1. Open .env.local
-    2. Add:  DEPLOYER_PRIVATE_KEY=<your_private_key>
-    3. Re-run:  npm run deploy:arc
-
-  First time? Run:  node scripts/setupEnv.js
+  1. Open .env.local
+  2. Add:  DEPLOYER_PRIVATE_KEY=<your_private_key>
+  3. Re-run:  npm run deploy:arc
 `);
     process.exit(1);
   }
 
-  // ── 2. Print deployment header ────────────────────────────────────────────
+  // ── Header ────────────────────────────────────────────────────────────────
   const [deployer] = await ethers.getSigners();
   const balance    = await ethers.provider.getBalance(deployer.address);
   const chainInfo  = await ethers.provider.getNetwork();
@@ -60,37 +57,35 @@ async function main() {
   console.log("──────────────────────────────────────────────────────────\n");
 
   if (balance === 0n) {
-    console.error("✗ Deployer has 0 USDC balance.");
-    console.error("  Get Arc testnet USDC from: https://faucet.circle.com");
+    console.error("✗ Deployer has 0 USDC. Get testnet USDC: https://faucet.circle.com");
     process.exit(1);
   }
 
-  // ── 3. Deploy GMCore ──────────────────────────────────────────────────────
+  // ── Deploy GMCore ─────────────────────────────────────────────────────────
   process.stdout.write("  [1/2] Deploying GMCore…  ");
   const GMCore        = await ethers.getContractFactory("GMCore");
   const gmCore        = await GMCore.deploy();
   await gmCore.waitForDeployment();
   const gmCoreAddress = await gmCore.getAddress();
   const gmCoreTx      = gmCore.deploymentTransaction()?.hash ?? "";
-  console.log(`✔`);
+  console.log("✔");
   console.log(`         Address : ${gmCoreAddress}`);
   console.log(`         TX      : ${gmCoreTx}`);
   console.log(`         Explorer: https://testnet.arcscan.app/tx/${gmCoreTx}\n`);
 
-  // ── 4. Deploy GMNFT ───────────────────────────────────────────────────────
+  // ── Deploy GMNFT ──────────────────────────────────────────────────────────
   process.stdout.write("  [2/2] Deploying GMNFT…   ");
   const GMNFT        = await ethers.getContractFactory("GMNFT");
   const gmNft        = await GMNFT.deploy(gmCoreAddress);
   await gmNft.waitForDeployment();
   const gmNftAddress = await gmNft.getAddress();
   const gmNftTx      = gmNft.deploymentTransaction()?.hash ?? "";
-  console.log(`✔`);
+  console.log("✔");
   console.log(`         Address : ${gmNftAddress}`);
   console.log(`         TX      : ${gmNftTx}`);
   console.log(`         Explorer: https://testnet.arcscan.app/tx/${gmNftTx}\n`);
 
-  // ── 5. Auto-write addresses to .env.local ─────────────────────────────────
-  // updateEnv NEVER touches DEPLOYER_PRIVATE_KEY or any secret
+  // ── Write addresses to .env.local ─────────────────────────────────────────
   process.stdout.write("  [✎] Writing addresses to .env.local…  ");
   try {
     const { written, appended } = updateEnv(ENV_LOCAL, {
@@ -101,15 +96,13 @@ async function main() {
     if (written.length)  console.log(`         Updated : ${written.join(", ")}`);
     if (appended.length) console.log(`         Added   : ${appended.join(", ")}`);
   } catch (e: any) {
-    console.log("⚠ (could not write — update manually)");
+    console.log("⚠ (write failed — update manually)");
     console.error("  Error:", e.message);
-    // Non-fatal — print fallback
-    console.log("\n  Paste manually into .env.local:");
-    console.log(`  NEXT_PUBLIC_GM_CORE_ADDRESS=${gmCoreAddress}`);
+    console.log(`\n  NEXT_PUBLIC_GM_CORE_ADDRESS=${gmCoreAddress}`);
     console.log(`  NEXT_PUBLIC_GM_NFT_ADDRESS=${gmNftAddress}`);
   }
 
-  // ── 6. Summary ────────────────────────────────────────────────────────────
+  // ── Summary ───────────────────────────────────────────────────────────────
   console.log("\n╔══════════════════════════════════════════════════════════╗");
   console.log("║  ✔  Deployment complete — .env.local updated             ║");
   console.log("╚══════════════════════════════════════════════════════════╝");
@@ -118,8 +111,7 @@ async function main() {
   console.log(`\n  Explorer:`);
   console.log(`    https://testnet.arcscan.app/address/${gmCoreAddress}`);
   console.log(`    https://testnet.arcscan.app/address/${gmNftAddress}`);
-  console.log(`\n⚠️  You may now remove DEPLOYER_PRIVATE_KEY from .env.local`);
-  console.log("   (keep it safe — you'll need it for future deployments)\n");
+  console.log(`\n⚠️  You may now remove DEPLOYER_PRIVATE_KEY from .env.local\n`);
 }
 
 main().catch((err) => {

@@ -2,13 +2,16 @@
   "name": "flowpay",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18 <=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "setup": "node scripts/setupEnv.js",
-    "deploy:arc": "node scripts/setupEnv.js && npx hardhat run scripts/deploy-gm-engine.ts --network arcTestnet"
+    "deploy:arc": "node scripts/checkNode.js && node scripts/setupEnv.js && npx hardhat run scripts/deploy-gm-engine.ts --network arcTestnet"
   },
   "dependencies": {
     "@circle-fin/adapter-viem-v2": "^1.8.2",
