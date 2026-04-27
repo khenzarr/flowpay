@@ -74,7 +74,7 @@ export async function getUsdcBalance(
     const provider = getProvider();
     if (isNativeUsdc(chainId)) {
       const raw = await provider.getBalance(userAddress);
-      return formatUnits(raw, 6);
+      return formatUnits(raw, chain.usdcDecimals);
     }
     const usdcAddr = await getUsdcAddress(chainId);
     if (!usdcAddr) return "0";

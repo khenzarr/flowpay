@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest --run",
     "setup": "node scripts/setupEnv.js",
     "deploy:arc": "node scripts/checkNode.js && node scripts/setupEnv.js && npx hardhat run scripts/deploy-gm-engine.js --network arcTestnet"
   },
@@ -27,17 +28,23 @@
     "wagmi": "^3.6.1"
   },
   "devDependencies": {
+    "@fast-check/vitest": "^0.4.0",
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/ui": "^4.1.5",
     "babel-plugin-react-compiler": "1.0.0",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
     "hardhat": "^2.28.6",
+    "jsdom": "^29.0.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.5"
   }
 }

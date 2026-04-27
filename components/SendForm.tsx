@@ -6,6 +6,7 @@ import { determineRoute, calculateFee, amountAfterFee } from "@/lib/flowRouter";
 import { RouteDisplay } from "./RouteDisplay";
 import { StatusPanel, TxStatus } from "./StatusPanel";
 import { UsdcBalance } from "./UsdcBalance";
+import { ArcNSResolutionStatus } from "./ArcNSResolutionStatus";
 import {
   getUsdcAddress,
   executeSend,
@@ -18,8 +19,11 @@ import {
   CHAIN_LIST,
   DEFAULT_SOURCE_CHAIN_ID,
   DEFAULT_DEST_CHAIN_ID,
+  ARC_CHAIN_ID,
 } from "@/lib/chains";
 import { isNativeUsdc } from "@/lib/contracts";
+import { useArcNSResolution } from "@/hooks/useArcNSResolution";
+import { isArcNSName } from "@/lib/arcnsResolver";
 
 const FEE_RECIPIENT = process.env.NEXT_PUBLIC_FEE_RECIPIENT ?? "";
 
@@ -50,7 +54,8 @@ export function SendForm() {
   const handleSourceChange = useCallback(
     (id: number) => {
       setSourceChainId(id);
-      if (id === destChainId) {
+      // Only force a dest swap if dest === source AND it's not Arc → Arc
+      if (id === destChainId && id !== ARC_CHAIN_ID) {
         const fallback = CHAIN_LIST.find((c) => c.id !== id);
         if (fallback) setDestChainId(fallback.id);
       }
@@ -63,7 +68,8 @@ export function SendForm() {
   const handleDestChange = useCallback(
     (id: number) => {
       setDestChainId(id);
-      if (id === sourceChainId) {
+      // Only force a source swap if source === dest AND it's not Arc → Arc
+      if (id === sourceChainId && id !== ARC_CHAIN_ID) {
         const fallback = CHAIN_LIST.find((c) => c.id !== id);
         if (fallback) setSourceChainId(fallback.id);
       }
@@ -87,8 +93,21 @@ export function SendForm() {
   const fee = calculateFee(amount);
   const receiveAmount = amountAfterFee(amount);
 
-  const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(recipient);
+  // ── ArcNS resolution ───────────────────────────────────────────────────────
+  const { state: arcnsState, resolvedAddress } = useArcNSResolution(recipient, destChainId);
+
+  // If the user typed an ArcNS name and it resolved, use the resolved 0x address.
+  // Otherwise pass the raw input through unchanged (preserves existing 0x behavior).
+  const effectiveRecipient =
+    isArcNSName(recipient) && arcnsState === "resolved" && resolvedAddress
+      ? resolvedAddress
+      : recipient;
+
+  const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(effectiveRecipient);
   const isValidAmount = parseFloat(amount) > 0;
+
+  // Block send if user typed an ArcNS name but it hasn't resolved yet
+  const arcnsBlocking = isArcNSName(recipient) && arcnsState !== "resolved";
 
   // Wallet must be on source chain — we show an error, never auto-switch
   const walletOnSource = walletChainId === sourceChainId;
@@ -100,7 +119,8 @@ export function SendForm() {
     isValidAmount &&
     !!sourceChain &&
     !!destChain &&
-    walletOnSource;
+    walletOnSource &&
+    !arcnsBlocking;
 
   // ── STEP 1: Execute source transaction ────────────────────────────────────
   async function handleStep1() {
@@ -129,7 +149,7 @@ export function SendForm() {
         FEE_RECIPIENT &&
         FEE_RECIPIENT !== "0x0000000000000000000000000000000000000000";
       if (parseFloat(feeAmount) > 0 && validFeeRecipient) {
-        setStatus({ type: "loading", message: "Sending 0.5% fee…" });
+        setStatus({ type: "loading", message: "Sending 0.5% fee — approve the first wallet popup…" });
         try {
           const feeStep = await executeSend(
             usdcAddr,
@@ -139,7 +159,7 @@ export function SendForm() {
             sourceChain.explorerTxUrl,
             sourceChainId
           );
-          allSteps.push({ ...feeStep, name: "Fee (0.5%)" });
+          allSteps.push({ ...feeStep, name: "Fee (0.5%) — FlowPay fee address" });
         } catch (e: any) {
           console.warn("[fee]", e?.message);
         }
@@ -147,16 +167,25 @@ export function SendForm() {
 
       if (!route.needsBridge) {
         // ── Direct same-chain send ──────────────────────────────────────────
-        setStatus({ type: "loading", message: `Sending ${netAmount} USDC on ${sourceChain.name}…` });
+        const sendMsg = sourceChain.isArc
+          ? `Sending ${netAmount} USDC on ${sourceChain.name} — approve the wallet popup…`
+          : `Sending ${netAmount} USDC on ${sourceChain.name}…`;
+        setStatus({ type: "loading", message: sendMsg });
         const sendStep = await executeSend(
           usdcAddr,
-          recipient,
+          effectiveRecipient,
           netAmount,
           sourceChain.usdcDecimals,
           sourceChain.explorerTxUrl,
           sourceChainId
         );
-        allSteps.push(sendStep);
+        const sendStepName = isArcNSName(recipient) && resolvedAddress
+          ? `Sent ${netAmount} USDC → ${recipient}`
+          : `Sent ${netAmount} USDC → ${effectiveRecipient.slice(0, 8)}…`;
+        const arcDisplayNote = sourceChain.isArc
+          ? "Explorer may show 0 — Arc native USDC uses 6 decimals"
+          : undefined;
+        allSteps.push({ ...sendStep, name: sendStepName, message: sendStep.message ?? arcDisplayNote });
         setStatus({ type: "success", steps: allSteps });
       } else {
         // ── Cross-chain Step 1: source tx ───────────────────────────────────
@@ -164,7 +193,7 @@ export function SendForm() {
         const sourceTx = await executeSourceTx(
           sourceChain,
           usdcAddr,
-          recipient,
+          effectiveRecipient,
           netAmount
         );
         allSteps.push({ ...sourceTx, name: `Step 1: Sent on ${sourceChain.shortName} ✓` });
@@ -179,7 +208,7 @@ export function SendForm() {
           sourceTxHash: sourceTx.txHash ?? "",
           sourceExplorerUrl: sourceTx.explorerUrl ?? "",
           destChainId,
-          recipient,
+          recipient: effectiveRecipient,
           amount: netAmount,
         });
 
@@ -299,7 +328,7 @@ export function SendForm() {
               disabled={!!pendingXChain}
               className="input-glow w-full bg-white/[0.04] border border-white/[0.08] focus:border-violet-500/50 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-all appearance-none cursor-pointer pr-7 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {CHAIN_LIST.filter((c) => c.id !== sourceChainId).map((chain) => (
+              {CHAIN_LIST.filter((c) => c.id !== sourceChainId || c.id === ARC_CHAIN_ID).map((chain) => (
                 <option key={chain.id} value={chain.id}>
                   {chain.shortName}{chain.isArc ? " ⚡" : ""}
                 </option>
@@ -337,20 +366,29 @@ export function SendForm() {
         </label>
         <input
           type="text"
-          placeholder="0x..."
+          placeholder="0x... or name.arc"
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
           disabled={!!pendingXChain}
           className={`input-glow w-full bg-white/[0.04] border rounded-xl px-4 py-3 text-sm font-mono text-white placeholder-white/15 outline-none transition-all disabled:opacity-50 ${
-            recipient && !isValidAddress
+            recipient && !isValidAddress && !isArcNSName(recipient)
               ? "border-red-500/40"
               : "border-white/[0.08] focus:border-violet-500/50"
           }`}
         />
-        {recipient && !isValidAddress && (
-          <p className="text-xs text-red-400/80 flex items-center gap-1">
-            <span>⚠</span> Invalid address
-          </p>
+        {/* Show ArcNS resolution status when input is an ArcNS name */}
+        {isArcNSName(recipient) ? (
+          <ArcNSResolutionStatus
+            state={arcnsState}
+            resolvedAddress={resolvedAddress}
+            enteredName={recipient}
+          />
+        ) : (
+          recipient && !isValidAddress && (
+            <p className="text-xs text-red-400/80 flex items-center gap-1">
+              <span>⚠</span> Invalid address
+            </p>
+          )
         )}
       </div>
 
@@ -413,6 +451,48 @@ export function SendForm() {
         />
       )}
 
+      {/* ── Arc send notice — shown before the user clicks Send ──────────── */}
+      {isValidAmount && isValidAddress && sourceChain?.isArc && !pendingXChain && (
+        <div className="rounded-lg bg-violet-500/5 border border-violet-500/15 px-3 py-2.5 space-y-1.5">
+          <p className="text-[11px] font-semibold text-violet-300/70 uppercase tracking-widest">
+            Wallet popups for this send
+          </p>
+          {/* Fee tx — only shown when a valid fee recipient is configured */}
+          {parseFloat(fee) > 0 && FEE_RECIPIENT && FEE_RECIPIENT !== "0x0000000000000000000000000000000000000000" && (
+            <div className="flex items-start gap-2">
+              <span className="text-[10px] text-white/30 font-mono mt-0.5 flex-shrink-0">1.</span>
+              <p className="text-[11px] text-white/40">
+                <span className="text-amber-400/80">{fee} USDC</span> fee transfer to the FlowPay fee address — approve this first.
+              </p>
+            </div>
+          )}
+          {/* Main send tx */}
+          <div className="flex items-start gap-2">
+            <span className="text-[10px] text-white/30 font-mono mt-0.5 flex-shrink-0">
+              {parseFloat(fee) > 0 && FEE_RECIPIENT && FEE_RECIPIENT !== "0x0000000000000000000000000000000000000000" ? "2." : "1."}
+            </span>
+            <div className="text-[11px] text-white/40 space-y-0.5">
+              <p>
+                <span className="text-emerald-400/80">{receiveAmount} USDC</span> sent to{" "}
+                {isArcNSName(recipient) && resolvedAddress ? (
+                  <span>
+                    <span className="text-white/60">{recipient}</span>
+                    {" "}→{" "}
+                    <span className="font-mono text-white/40 break-all">{resolvedAddress}</span>
+                  </span>
+                ) : (
+                  <span className="font-mono text-white/50 break-all">{effectiveRecipient}</span>
+                )}
+              </p>
+            </div>
+          </div>
+          {/* Arc native display note */}
+          <p className="text-[10px] text-white/20 pt-0.5 border-t border-white/[0.05]">
+            Arc USDC is the native gas token (18 decimals for value transfers). MetaMask and the explorer may display amounts differently — the actual amount is correct on-chain.
+          </p>
+        </div>
+      )}
+
       {/* ── STEP 1 button ─────────────────────────────────────────────────── */}
       {!pendingXChain && (
         <button
@@ -471,6 +551,14 @@ export function SendForm() {
               Switch your wallet to <span className="text-white/60 font-medium">{destChain?.shortName}</span>,
               then click below to credit {pendingXChain.amount} USDC to the recipient.
             </p>
+            {/* Show ArcNS name + resolved address when the send was initiated via ArcNS */}
+            {recipient && isArcNSName(recipient) && pendingXChain.recipient !== recipient && (
+              <div className="pt-1 border-t border-white/[0.06] space-y-0.5">
+                <p className="text-[10px] text-white/30">ArcNS name</p>
+                <p className="text-[10px] text-white/50 font-mono">{recipient}</p>
+                <p className="text-[10px] text-emerald-400/70 font-mono break-all">{pendingXChain.recipient}</p>
+              </div>
+            )}
           </div>
 
           {/* Wallet on dest check */}

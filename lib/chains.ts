@@ -21,7 +21,10 @@ export interface ChainConfig {
 export const CHAINS = {
   // Arc Testnet — PRIMARY
   // Source: https://docs.arc.network/arc/references/connect-to-arc
-  // ChainId: 5042002 | Native gas token: USDC (6 decimals, NOT ETH)
+  // ChainId: 5042002 | Native gas token: USDC
+  // IMPORTANT: Arc native USDC uses 18 decimals for the value field in
+  // sendTransaction (same as ETH). The ERC-20 USDC interface uses 6 decimals,
+  // but native value transfers must use parseUnits(amount, 18).
   arc: {
     id: 5042002,
     name: "Arc Testnet",
@@ -29,9 +32,9 @@ export const CHAINS = {
     rpcUrl: "https://rpc.testnet.arc.network",
     explorerUrl: "https://testnet.arcscan.app",
     explorerTxUrl: "https://testnet.arcscan.app/tx/",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
     usdcAddress: null,
-    usdcDecimals: 6,
+    usdcDecimals: 18, // native value field uses 18 decimals (not ERC-20's 6)
     isTestnet: true as const,
     isArc: true,
   },
