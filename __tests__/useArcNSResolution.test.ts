@@ -195,6 +195,29 @@ describe("useArcNSResolution — resolution states", () => {
   });
 });
 
+// ── Bug Condition: zero address ───────────────────────────────────────────────
+// Bugfix spec: arcns-zero-address-fix
+// Task 1: Bug condition exploration test
+//
+// CRITICAL: This test MUST FAIL on unfixed code — failure confirms the bug exists.
+// DO NOT attempt to fix the test or the code when it fails.
+//
+// Validates: Requirements 1.1, 2.1, 2.4
+
+describe("Bug Condition: zero address", () => {
+  it("transitions to zero_address state with null resolvedAddress when resolver returns zero address", async () => {
+    mockFetch({ status: "ok", address: "0x0000000000000000000000000000000000000000" });
+
+    const { result } = renderHook(() =>
+      useArcNSResolution("alice.arc", ARC_CHAIN_ID)
+    );
+
+    await flushResolution();
+    expect(result.current.state).toBe("zero_address");
+    expect(result.current.resolvedAddress).toBeNull();
+  });
+});
+
 // ── Property 5: Input change always resets resolution state to idle ───────────
 
 // Feature: arcns-name-sending, Property 5: Input change always resets resolution state to idle

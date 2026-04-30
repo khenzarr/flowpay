@@ -186,3 +186,27 @@ describe("Preservation — resolved, resolving, and idle states", () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+// ── Bug Condition: zero address ───────────────────────────────────────────────
+// Bugfix spec: arcns-zero-address-fix
+// Task 1: Bug condition exploration test
+//
+// CRITICAL: This test MUST FAIL on unfixed code — failure confirms the bug exists.
+// DO NOT attempt to fix the test or the code when it fails.
+// state="zero_address" is absent from errorMessages, so the component renders null.
+//
+// Validates: Requirements 1.3, 2.2
+
+describe("Bug Condition: zero address — ArcNSResolutionStatus", () => {
+  it("renders 'No receiving address set for this name' when state is zero_address", () => {
+    render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <ArcNSResolutionStatus
+        state={"zero_address" as any}
+        resolvedAddress={null}
+        enteredName="alice.arc"
+      />
+    );
+    screen.getByText("No receiving address set for this name");
+  });
+});

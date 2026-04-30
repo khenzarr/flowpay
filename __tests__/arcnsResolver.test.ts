@@ -243,6 +243,33 @@ describe("resolveArcNSName — example tests", () => {
   });
 });
 
+// ── Bug Condition: zero address ───────────────────────────────────────────────
+// Bugfix spec: arcns-zero-address-fix
+// Task 1: Bug condition exploration test
+// Property 1: Bug Condition — Zero Address Returns `zero_address` State
+//
+// CRITICAL: These tests MUST FAIL on unfixed code — failure confirms the bug exists.
+// DO NOT attempt to fix the test or the code when it fails.
+// These tests encode the expected behavior and will pass after the fix is applied.
+//
+// Validates: Requirements 1.1, 2.1, 2.4
+
+describe("Bug Condition: zero address", () => {
+  it("returns zero_address state when adapter returns status:'ok' with zero address", async () => {
+    mockFetch({ status: "ok", address: "0x0000000000000000000000000000000000000000" });
+    const result = await resolveArcNSName("alice.arc");
+    expect(result.state).toBe("zero_address");
+    expect(result.address).toBeUndefined();
+  });
+
+  it("returns zero_address state when adapter returns status:'resolved' with zero address", async () => {
+    mockFetch({ status: "resolved", address: "0x0000000000000000000000000000000000000000" });
+    const result = await resolveArcNSName("alice.arc");
+    expect(result.state).toBe("zero_address");
+    expect(result.address).toBeUndefined();
+  });
+});
+
 // ── Property-based tests ──────────────────────────────────────────────────────
 
 // Feature: arcns-name-sending, Property 1: ArcNS name classification is mutually exclusive with valid 0x addresses
@@ -304,6 +331,50 @@ describe("Property 3: Resolved address is always a valid 0x address", () => {
       vi.unstubAllGlobals();
     }
   );
+});
+
+// ── Preservation: non-zero-address inputs behave identically ─────────────────
+// Bugfix spec: arcns-zero-address-fix
+// Task 2: Preservation property tests (BEFORE implementing fix)
+// Property 2: Preservation — Non-Zero-Address Inputs Behave Identically
+//
+// EXPECTED OUTCOME: All preservation tests PASS on unfixed code (confirms baseline behavior to preserve)
+//
+// Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5
+
+describe("Preservation: non-zero-address inputs behave identically", () => {
+  // Property-based test: for any randomly generated non-zero 40-hex address,
+  // the resolver must return state="resolved" with the same address.
+  // This verifies the zero-address guard (once added) does not accidentally fire for any other address.
+  fcTest.prop([
+    fc
+      .stringMatching(/^[a-fA-F0-9]{40}$/)
+      .filter((hex) => hex !== "0000000000000000000000000000000000000000"),
+  ])(
+    "any non-zero 40-hex address resolves to state=resolved with the same address",
+    async (hex) => {
+      const addr = "0x" + hex;
+      mockFetch({ status: "ok", address: addr });
+
+      const result = await resolveArcNSName("alice.arc");
+      expect(result.state).toBe("resolved");
+      expect(result.address).toBe(addr);
+
+      vi.unstubAllGlobals();
+    }
+  );
+
+  it("not_found preservation — mock { status: 'not_found' } returns state=not_found", async () => {
+    mockFetch({ status: "not_found" });
+    const result = await resolveArcNSName("unknown.arc");
+    expect(result.state).toBe("not_found");
+  });
+
+  it("adapter_unavailable preservation — network error returns state=adapter_unavailable", async () => {
+    mockFetchNetworkError();
+    const result = await resolveArcNSName("alice.arc");
+    expect(result.state).toBe("adapter_unavailable");
+  });
 });
 
 // Feature: arcns-name-sending, Property 7: Resolver is idempotent for the same input and adapter response

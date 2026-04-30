@@ -55,3 +55,5 @@ next-env.d.ts
 /artifacts/
 /cache/
 /typechain-types/
+
+.kiro/

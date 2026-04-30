@@ -40,6 +40,7 @@ export function ArcNSResolutionStatus({
   }
 
   const errorMessages: Partial<Record<ResolutionState, string>> = {
+    zero_address: "No receiving address set for this name",
     not_found: "This ArcNS name does not currently resolve to a wallet address.",
     unsupported_tld: "Unsupported name — use .arc or .circle",
     invalid: "Invalid ArcNS name",

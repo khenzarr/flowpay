@@ -9,6 +9,7 @@ export type ResolutionState =
   | "idle"
   | "resolving"
   | "resolved"
+  | "zero_address"
   | "not_found"
   | "invalid"
   | "unsupported_tld"
@@ -88,6 +89,10 @@ export async function resolveArcNSName(
         // Guard: resolved address must be a valid 0x address
         if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) {
           return { state: "not_found" };
+        }
+        // Guard: zero address means "no receiving address set"
+        if (addr === "0x0000000000000000000000000000000000000000") {
+          return { state: "zero_address" };
         }
         return { state: "resolved", address: addr };
       }
